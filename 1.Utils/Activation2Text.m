@@ -1,5 +1,9 @@
 function Activation2Text(SimNet,Address,testImage_tmp)
 
+
+mkdir(Address)
+mkdir([Address,'\Activations'])
+
 for i=1:size(SimNet.Layers,1)
     
     %     txtName=[Address,'\Activations\',num2str(i),'_',SimNet.Layers(i, 1).Name,'.txt'];
