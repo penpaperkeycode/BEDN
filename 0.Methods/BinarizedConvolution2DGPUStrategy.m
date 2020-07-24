@@ -1,5 +1,5 @@
 classdef BinarizedConvolution2DGPUStrategy < nnet.internal.cnn.layer.util.ExecutionStrategy
-    % BinarziedConvolution2DGPUStrategy   Execution strategy for running the
+    % Convolution2DGPUStrategy   Execution strategy for running the
     % convolution on the GPU
     
     %   Copyright 2016-2018 The MathWorks, Inc.
@@ -13,9 +13,8 @@ classdef BinarizedConvolution2DGPUStrategy < nnet.internal.cnn.layer.util.Execut
                 verticalDilation, horizontalDilation)
             paddingSize = [topPad bottomPad leftPad rightPad];
             
-            weights= sign(weights);  %%%%%%%
-            weights(weights==0)=1;
-            
+            weights= sign(weights);  %%%%%%%%%%%%%%%%%%%%%
+            weights(weights==0)=1;  %%%%%%%%%%%%%%%%%%%%%
             
             if iPaddingIsSymmetric(paddingSize)
                 Z = nnet.internal.cnngpu.convolveForward2D( ...
@@ -45,8 +44,9 @@ classdef BinarizedConvolution2DGPUStrategy < nnet.internal.cnn.layer.util.Execut
             paddingSize = [topPad bottomPad leftPad rightPad];
             needsWeightGradients = nargout > 1;
             
-            weights= sign(weights);  %%%%%%%
-            weights(weights==0)=1;
+            weightsFP=weights;    %%%%%%%%%%%%%%%%%%%%%
+            weights= sign(weights);  %%%%%%%%%%%%%%%%%%%%%
+            weights(weights==0)=1;  %%%%%%%%%%%%%%%%%%%%%
             
             if iPaddingIsSymmetric(paddingSize)
                 dX = nnet.internal.cnngpu.convolveBackwardData2D( ...
@@ -56,6 +56,9 @@ classdef BinarizedConvolution2DGPUStrategy < nnet.internal.cnn.layer.util.Execut
                     strideHeight, strideWidth, ...
                     verticalDilation, horizontalDilation);
                 if needsWeightGradients
+                    
+                    weights=weightsFP; %%%%%%%%%%%%%%%%%
+                    
                     dW{1} = nnet.internal.cnngpu.convolveBackwardFilter2D( ...
                         X, weights, dZ, ...
                         topPad, leftPad, ...
@@ -73,6 +76,9 @@ classdef BinarizedConvolution2DGPUStrategy < nnet.internal.cnn.layer.util.Execut
                     verticalDilation, horizontalDilation);
                 dX = iUnpadArray(dX, paddingSize);
                 if needsWeightGradients
+                    
+                    weights=weightsFP; %%%%%%%%%%%%%%%%%
+                    
                     dW{1} = nnet.internal.cnngpu.convolveBackwardFilter2D( ...
                         X, weights, dZ, ...
                         0, 0, ...

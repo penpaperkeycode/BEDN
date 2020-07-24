@@ -25,24 +25,20 @@ classdef SignumActivation < nnet.layer.Layer
             %             Z=round(max(-1,min(1,X)));
             %             X = gpuArray(X); % No-op if already on GPU
             
-%                         if ~isa(X,'gpuArray')% No-op if already on GPU
-%                             X = gpuArray(single(X));
-%                         end
-%             if X==0
-%                 Z=1;
-%             else
-%                 Z=X ./ ABS(X);
-%             end
+            %             if ~isa(X,'gpuArray')% No-op if already on GPU
+            %                 X = gpuArray(single(X));
+            %             end
+            
+            
+            
             Z=sign(X);
             Z(Z==0)=1;
-            %             Z = max(0,X);
-            %                         Z=X./abs(X);
             memory=[];
             
+            %             if existsOnGPU(X)% No-op if already on GPU
+            %                 Z = gpuArray(single(Z));
+            %             end
             
-%             if existsOnGPU(X)% No-op if already on GPU
-%                 Z = gpuArray(single(Z));
-%             end
             
         end
         
@@ -57,23 +53,23 @@ classdef SignumActivation < nnet.layer.Layer
             %             Z=round(max(-1,min(1,X)));
             
             
-%                         if ~isa(X,'gpuArray')% No-op if already on GPU
-%                             X = gpuArray(single(X));
-%                         end
+            %                                     if ~isa(X,'gpuArray')% No-op if already on GPU
+            %                                         X = gpuArray(single(X));
+            %                                     end
             
             
             %             Z=X./abs(X);
             Z=sign(X);
             Z(Z==0)=1;
-%             if X==0
-%                 Z=1;
-%             else
-%                 Z=X ./ ABS(X);
-%             end
+            %             if X==0
+            %                 Z=1;
+            %             else
+            %                 Z=X ./ ABS(X);
+            %             end
             
-%             if existsOnGPU(X)% No-op if already on GPU
-%                 Z = gpuArray(single(Z));
-%             end
+            %                         if existsOnGPU(X)% No-op if already on GPU
+            %                             Z = gpuArray(single(Z));
+            %                         end
             
             
         end
@@ -96,22 +92,22 @@ classdef SignumActivation < nnet.layer.Layer
             %             dLdX = (dLdZ) .*(X>-1 & X<1) + (X>=1) -(X<=-1) ;
             
             
-%                         if existsOnGPU(dLdZ) || existsOnGPU(X)% No-op if already on GPU
-%                             dLdZ = gpuArray(single(dLdZ));
-%                         end
-%                         if ~isa(X,'gpuArray')% No-op if already on GPU
-%                             X = gpuArray(single(X));
-%                         end
+            %                                     if existsOnGPU(dLdZ) || existsOnGPU(X)% No-op if already on GPU
+            %                                         dLdZ = gpuArray(single(dLdZ));
+            %                                     end
+            %                         if ~isa(X,'gpuArray')% No-op if already on GPU
+            %                             X = gpuArray(single(X));
+            %                         end
             
-            dLdX = 2*sech(X).^2.*(dLdZ);
+            dLdX = 2.5*sech(X).^2.*(dLdZ); %2 or 3 is good
             
-%             dLdX = (1 - X.^2) .* dLdZ;
+            %             dLdX = (1 - X.^2) .* dLdZ;
             
-%             if existsOnGPU(dLdZ) || existsOnGPU(X)% No-op if already on GPU
-%                 dLdX = gpuArray(single(dLdX));
-%             end
+            %                         if existsOnGPU(dLdZ) || existsOnGPU(X)% No-op if already on GPU
+            %                             dLdX = gpuArray(single(dLdX));
+            %                         end
             
-            %  dLdX = (dLdZ) .*(X>-1 & X<1) ;
+            %              dLdX = (dLdZ) .*(X>-1 & X<1) ;
             
             
         end

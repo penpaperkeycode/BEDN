@@ -1,7 +1,7 @@
-classdef BinarizedTransposedConvolution2D < nnet.internal.cnn.layer.Layer
+classdef BinarizedTransposedConvolution2D < nnet.internal.cnn.layer.FunctionalLayer
     % TransposedConvolution2D   Implementation of the 2D transposed convolution layer
     
-    %   Copyright 2017 The MathWorks, Inc.
+    %   Copyright 2017-2019 The MathWorks, Inc.
     
     properties
         % LearnableParameters   Learnable parameters for the layer
@@ -11,6 +11,9 @@ classdef BinarizedTransposedConvolution2D < nnet.internal.cnn.layer.Layer
         % Name (char array)   A name for the layer
         Name
         
+        % OutputSizeOffset (1x2 int vector)    A number in [0,stride-1]
+        % corresponding to the offset to the output size.
+        OutputSizeOffset
     end
     
     properties (Constant)
@@ -44,8 +47,11 @@ classdef BinarizedTransposedConvolution2D < nnet.internal.cnn.layer.Layer
         % Stride (vector of int) Stride for each dimension
         Stride
         
-        % Padding (vector of int) Padding for each dimension
-        Padding
+        % CroppingMode (char) Cropping mode: 'manual' or 'same'
+        CroppingMode
+        
+        % CroppingSize (vector of int) Cropping for each dimension
+        CroppingSize
     end
     
     properties(Access = private)
@@ -56,6 +62,13 @@ classdef BinarizedTransposedConvolution2D < nnet.internal.cnn.layer.Layer
         % Learnable Parameters (nnet.internal.cnn.layer.LearnableParameter)
         Weights
         Bias
+        
+        % Learnables    Cell array of learnable parameter values
+        Learnables
+    end
+    
+    properties(SetAccess=protected, GetAccess=?nnet.internal.cnn.dlnetwork)
+        LearnablesNames = ["Weights" "Bias"]
     end
     
     properties (Constant, Access = private)
@@ -68,98 +81,176 @@ classdef BinarizedTransposedConvolution2D < nnet.internal.cnn.layer.Layer
         BiasIndex = 2;
     end
     
+    properties(Dependent, SetAccess=private)
+        % Expected Weights size
+        ExtWeightsSize
+        
+        % Expected Bias size
+        ExtBiasSize
+    end
+    
     methods
-        function this = BinarizedTransposedConvolution2D(name, filterSize, numChannels, ...
-                numFilters, stride, padding)
-            % TransposedConvolution2D   Constructor for a TransposedConvolution2D layer
+        function this = BinarizedTransposedConvolution2D(params)
+            % TransposedConvolution2D   Constructor for
+            % TransposedConvolution2D layer
             %
-            %   Create a 2D transposed convolutional layer with the
-            %   following compulsory parameters:
+            %   Create a 2D transposed convolutional layer. params has the
+            %   following compulsory fields:
             %
-            %       name            - Name for the layer
-            %       filterSize      - Size of the filters [height x width]
-            %       numChannels     - The number of channels that the input
-            %                       to the layer will have. [] if it has to
-            %                       be determined later
-            %       numFilters      - The number of filters in the layer
-            %       stride          - A vector specifying the stride for
-            %                       each dimension [height x width]
-            %       padding         - A vector specifying the padding for
-            %                       each dimension [height x width]
+            %       Name             - Name for the layer
+            %       FilterSize       - Size of the filters [height x width]
+            %       NumChannels      - The number of channels that the input
+            %                          to the layer will have. [] if it has
+            %                          to be determined later
+            %       NumFilters       - The number of filters in the layer
+            %       Stride           - A vector specifying the stride for
+            %                          each dimension [height x width]
+            %       CroppinMode      - Cropping mode: 'manual' or 'same'
+            %       CroppingSize     - A vector specifying the cropping for
+            %                          each dimension [top bottom left
+            %                          right]
+            %   Optional:
+            %       OutputSizeOffset - The offset of the output size.
+            %                          Default: [].
             
-            this.Name = name;
+            if ~isfield(params, 'OutputSizeOffset')
+                params.OutputSizeOffset = [];
+            end
+            
+            this.Name = params.Name;
+            this.NeedsZForBackward = false;
             
             % Set Hyperparameters
-            this.FilterSize = filterSize;
-            this.NumChannels = numChannels;
-            this.HasSizeDetermined = ~isempty( numChannels );
-            this.NumFilters = numFilters;
-            this.Stride = stride;
-            this.Padding = padding;
+            this.FilterSize = params.FilterSize;
+            this.NumChannels = params.NumChannels;
+            this.NumFilters = params.NumFilters;
+            this.Stride = params.Stride;
+            this.CroppingMode = params.CroppingMode;
+            if iIsTheStringSame(this.CroppingMode)
+                this = this.setCroppingAndOutputSizeOffsetIfSame();
+            else
+                this.OutputSizeOffset = params.OutputSizeOffset;
+                this.CroppingSize = params.CroppingSize;
+            end
+            this.HasSizeDetermined = ~isempty(this.NumChannels) && ...
+                ~isempty(this.OutputSizeOffset);
             
             % Set weights and bias to be LearnableParameter
             this.Weights = nnet.internal.cnn.layer.learnable.PredictionLearnableParameter();
             this.Bias = nnet.internal.cnn.layer.learnable.PredictionLearnableParameter();
+            % Set default initializers. The external layer constructor
+            % overwrites these values, which are set only for internal code
+            % that bypasses the casual API.
+            this.Weights.Initializer = iInternalInitializer('narrow-normal');
+            this.Bias.Initializer = iInternalInitializer('zeros');
             
             this.ExecutionStrategy = BinarizedTransposedConvolution2DHostStrategy();
         end
         
         function Z = predict( this, X )
-            % TODO g1530578 add asymmetric padding support.
-            Z = this.ExecutionStrategy.forward(X, ...
-                this.Weights.Value, ...
-                this.Bias.Value, ...
-                this.Padding(1), this.Padding(2), ...
-                this.Stride(1), this.Stride(2));
+            if isa(this.ExecutionStrategy, ...
+                    'nnet.internal.cnn.layer.util.FunctionalStrategy')
+                % TODO: This needs to be removed when the we replace the
+                % dltranspconv with the internal API that accepts cropping
+                % size and output size offset only
+                if isequal(this.CroppingMode, 'same')
+                    Z = this.ExecutionStrategy.forward(X, ...
+                        this.Weights.Value, ...
+                        this.Bias.Value, ...
+                        this.CroppingMode, ...
+                        this.Stride(1), this.Stride(2), ...
+                        this.OutputSizeOffset(1), this.OutputSizeOffset(2));
+                else
+                    bottomPad = this.CroppingSize(2);
+                    leftPad = this.CroppingSize(3);
+                    rightPad = this.CroppingSize(4);
+                    topPad = this.CroppingSize(1);
+                    Z = this.ExecutionStrategy.forward(X, ...
+                        this.Weights.Value, ...
+                        this.Bias.Value, ...
+                        [[bottomPad leftPad];[topPad rightPad]], ...
+                        this.Stride(1), this.Stride(2), ...
+                        this.OutputSizeOffset(1), this.OutputSizeOffset(2));
+                end
+            else
+                Z = this.ExecutionStrategy.forward(X, ...
+                    this.Weights.Value, ...
+                    this.Bias.Value, ...
+                    this.CroppingSize(1), this.CroppingSize(3), ... % t l
+                    this.CroppingSize(2), this.CroppingSize(4), ... % b r
+                    this.Stride(1), this.Stride(2), ...
+                    this.OutputSizeOffset(1), this.OutputSizeOffset(2));
+            end
         end
         
         function varargout = backward( this, X, ~, dZ, ~ )
-            % backward    Back propagate the derivative of the loss function
-            % thru the layer
-            
-            % TODO g1530578 asymmetric padding.
             [varargout{1:nargout}] = this.ExecutionStrategy.backward( ...
                 X, this.Weights.Value, dZ, ...
-                this.Padding(1), this.Padding(2), ...
-                this.Stride(1), this.Stride(2) ...
-                );
-            
+                this.CroppingSize(1), this.CroppingSize(3), ... % t l
+                this.CroppingSize(2), this.CroppingSize(4), ... % b r
+                this.Stride(1), this.Stride(2));
+        end
+        
+        function this = inferNumChannels(this, inputSize)
+            numChannels = iNumChannelsFromInputSize(inputSize);
+            this.NumChannels = numChannels;
         end
         
         function this = inferSize(this, inputSize)
-            % inferSize     Infer the number of channels based on the input size
-            numChannels = iNumChannelsFromInputSize(inputSize);
+            % Assume inputSize is 3d array of positive integers.
+            this = this.inferNumChannels(inputSize);
             
-            this.NumChannels = numChannels;
+            if ~iIsTheStringSame(this.CroppingMode)
+                totCropping = [this.CroppingSize(1)+this.CroppingSize(2), ...
+                    this.CroppingSize(3)+this.CroppingSize(4)];
+                % If cropping not same, compute dynamically
+                % outputSizeOffset, as the minimum allowed value.
+                % This is the minimum value such that
+                % 1) 0 <= outputSizeOffset < stride (from definition)
+                % 2) The output size of the layer is positive:
+                %    stride .* (inputSize(1:2) - 1) + this.FilterSize - ...
+                %       totCropping + outputSizeOffset >= 1
+                %    We rewrite this as
+                %    outputSizeOffset >= minOutputSizeOffset, with:
+                minOutputSizeOffset = 1 - this.Stride .* (inputSize(1:2) - 1) - ...
+                    this.FilterSize + totCropping;
+                if any(minOutputSizeOffset >= this.Stride)
+                    % If such value does not exist, error.
+                    error(message('nnet_cnn:layer:TransposedConvolution2DLayer:InvalidInputSize'));
+                else
+                    this.OutputSizeOffset = max(0, minOutputSizeOffset);
+                end
+            end
             
             this.HasSizeDetermined = true;
         end
         
         function tf = isValidInputSize(this, inputSize)
-            % isValidInputSize   Check if the layer can accept an input of
-            % a certain size.
+            % Assumes inferSize has been called. There we computed
+            % dynamically the outputSizeOffset so that input of a certain
+            % size is valid and we threw error if not. Here check
+            % numChannels and recheck valid output size.
             
-            tf = ~this.HasSizeDetermined || inputSize(3) == this.NumChannels;
+            cropping = [this.CroppingSize(1)+this.CroppingSize(2), ...
+                this.CroppingSize(3)+this.CroppingSize(4)];
+            outputHeightAndWidth = iOutputSize(inputSize(1:2), ...
+                this.FilterSize, this.Stride, cropping, ...
+                this.OutputSizeOffset);
             
-            % The input size must produce an output size that is at least
-            % as big as the filter size (otherwise backward will fail).
-            outputSize = this.forwardPropagateSize(inputSize);
-            
-            tf = tf && all(outputSize(1:2) >= this.FilterSize);
-            
+            tf = numel(inputSize) == 3 && inputSize(3) == this.NumChannels && all(outputHeightAndWidth > 0);
         end
         
         function outputSize = forwardPropagateSize(this, inputSize)
             % forwardPropagateSize    Output the size of the layer based on
-            % the input size
+            % the input size. Assumes inputSize is valid.
             
-            outputHeightAndWidth = this.Stride .* (inputSize(1:2) - 1) + this.FilterSize - 2*this.Padding;
+            cropping = [this.CroppingSize(1)+this.CroppingSize(2), ...
+                this.CroppingSize(3)+this.CroppingSize(4)];
+            outputHeightAndWidth = iOutputSize(inputSize(1:2), ...
+                this.FilterSize, this.Stride, cropping, ...
+                this.OutputSizeOffset);
             
-            if(this.HasSizeDetermined)
-                outputSize = [outputHeightAndWidth this.NumFilters];
-            else
-                outputSize = [outputHeightAndWidth NaN];
-            end
+            outputSize = [outputHeightAndWidth this.NumFilters];
         end
         
         function this = initializeLearnableParameters(this, precision)
@@ -170,7 +261,8 @@ classdef BinarizedTransposedConvolution2D < nnet.internal.cnn.layer.Layer
                 % Initialize only if it is empty
                 % Conv transpose requires to swap channels with num filters.
                 weightsSize = [this.FilterSize, this.NumFilters, this.NumChannels];
-                this.LearnableParameters(this.WeightsIndex).Value = iInitializeGaussian( weightsSize, precision );
+                weights = this.Weights.Initializer.initialize(weightsSize, 'Weights');
+                this.Weights.Value = precision.cast(weights);
             else
                 % Cast to desired precision
                 this.Weights.Value = precision.cast(this.Weights.Value);
@@ -179,7 +271,8 @@ classdef BinarizedTransposedConvolution2D < nnet.internal.cnn.layer.Layer
             if isempty(this.Bias.Value)
                 % Initialize only if it is empty
                 biasSize = [1, 1, this.NumFilters];
-                this.LearnableParameters(this.BiasIndex).Value = iInitializeConstant( biasSize, precision );
+                bias = this.Bias.Initializer.initialize(biasSize, 'Bias');
+                this.Bias.Value = precision.cast(bias);
             else
                 % Cast to desired precision
                 this.Bias.Value = precision.cast(this.Bias.Value);
@@ -227,7 +320,11 @@ classdef BinarizedTransposedConvolution2D < nnet.internal.cnn.layer.Layer
         % giving a name to each index of the vector
         function weights = get.Weights(this)
             weights = this.LearnableParameters(this.WeightsIndex);
-            weights.Value=max(-1,min(1,weights.Value)); %%%%%%%%%%%%%%%%%%%%%%%%%
+%             weights.Value=sign(weights.Value); %%%%%%%%%%%%%%%%%%%%%%%%%  Binarize Weights When training is finished
+%             weights.Value(weights.Value==0)=1; %%%%%%%%%%%%%%%%%%%%%%%%%  Binarize Weights When training is finished
+            weights.Value(weights.Value>1)=1; %%%%%%%%%%%%%%%%%%%%%%%%% 
+            weights.Value(weights.Value<-1)=-1; %%%%%%%%%%%%%%%%%%%%%%%%%  
+            
         end
         
         function this = set.Weights(this, weights)
@@ -241,19 +338,75 @@ classdef BinarizedTransposedConvolution2D < nnet.internal.cnn.layer.Layer
         function this = set.Bias(this, bias)
             this.LearnableParameters(this.BiasIndex) = bias;
         end
+        
+        function learnables = get.Learnables(this)
+            % Assume setupForFunctional has been called
+            w = this.Weights.Value;
+            b = this.Bias.Value;
+            learnables = {w, b};
+        end
+        
+        function this = set.Learnables(this, learnables)
+            % Assume setupForFunctional has been called
+            nnet.internal.cnn.layer.paramvalidation.assertValidLearnables(learnables{1}, this.ExtWeightsSize);
+            nnet.internal.cnn.layer.paramvalidation.assertValidLearnables(learnables{2}, this.ExtBiasSize);
+            
+            this.LearnableParameters(this.WeightsIndex).Value = learnables{1};
+            this.LearnableParameters(this.BiasIndex).Value = learnables{2};
+        end
+        
+        function sz = get.ExtWeightsSize(this)
+            expectedNumChannels = iExpectedNumChannels(this.NumChannels);
+            sz = [this.FilterSize this.NumFilters expectedNumChannels];
+        end
+        
+        function sz = get.ExtBiasSize(this)
+            sz = [1 1 this.NumFilters];
+        end
+    end
+    
+    methods(Access=protected)
+        function this = setFunctionalStrategy(this)
+            this.ExecutionStrategy = BinarizedTransposedConvolution2DFunctionalStrategy();
+        end
+    end
+    
+    methods(Access = private)
+        function this = setCroppingAndOutputSizeOffsetIfSame(this)
+            % Set cropping size and outputSizeOffset given stride and
+            % filter size in such a way that
+            % 1) The outputSize is stride*inputSize
+            % 2) Cropping is minimum
+            totalCropping = this.FilterSize - this.Stride;
+            this.OutputSizeOffset = max(0, -totalCropping);
+            totalCropping = totalCropping + this.OutputSizeOffset;
+            
+            % Height
+            t = floor(1/2*(totalCropping(1)));
+            b = ceil(1/2*(totalCropping(1)));
+            
+            % Width
+            l = floor(1/2*(totalCropping(2)));
+            r = ceil(1/2*(totalCropping(2)));
+            
+            this.CroppingSize = [t b l r];
+        end
     end
     
     methods(Static)
         function sz = outputSize(X, weights, ...
-                verticalPad, horizontalPad, ...
-                verticalStride, horizontalStride)
+                topPad, leftPad, bottomPad, rightPad, ...
+                verticalStride, horizontalStride, ...
+                verticalOutputSizeOffset, horizontalOutputSizeOffset)
             
             % Return a 4-D array size for the output of transposed conv.
             FH = size(weights,1);
             FW = size(weights,2);
             
-            H = verticalStride   * (size(X,1) - 1) + FH - 2*verticalPad;
-            W = horizontalStride * (size(X,2) - 1) + FW - 2*horizontalPad;
+            H = iOutputSize(size(X,1), FH, verticalStride, ...
+                topPad+bottomPad, verticalOutputSizeOffset);
+            W = iOutputSize(size(X,2), FW, horizontalStride, ...
+                leftPad+rightPad, horizontalOutputSizeOffset);
             C = size(weights,3);
             N = size(X,4);
             
@@ -263,20 +416,12 @@ classdef BinarizedTransposedConvolution2D < nnet.internal.cnn.layer.Layer
     end
 end
 
-function parameter = iInitializeGaussian(parameterSize, precision)
-parameter = precision.cast( ...
-    iNormRnd(0, 0.0000001, parameterSize) );   %%%%%
-end
-
-function parameter = iInitializeConstant(parameterSize, precision)
-parameter = precision.cast( ...
-    zeros(parameterSize) );
-end
-
-function out = iNormRnd(mu, sigma, outputSize)
-% iNormRnd  Returns an array of size 'outputSize' chosen from a
-% normal distribution with mean 'mu' and standard deviation 'sigma'
-out = randn(outputSize) .* sigma + mu;
+function outputSize = iOutputSize(inputSize, filterSize, stride, ...
+    totalCropping, outputSizeOffset)
+% Formula for the output size. Works for arguments arrays of arbitrary dim.
+assert(~isempty(totalCropping) && ~isempty(outputSizeOffset));
+outputSize = stride .* (inputSize - 1) + filterSize - totalCropping + ...
+    outputSizeOffset;
 end
 
 function numChannels = iNumChannelsFromInputSize(inputSize)
@@ -287,5 +432,21 @@ if numel(inputSize)<3
     numChannels = 1;
 else
     numChannels = inputSize(3);
+end
+end
+
+function tf = iIsTheStringSame(x)
+tf = nnet.internal.cnn.layer.padding.isTheStringSame(x);
+end
+
+function initializer = iInternalInitializer(name)
+initializer = nnet.internal.cnn.layer.learnable.initializer...
+    .initializerFactory(name);
+end
+
+function expectedNumChannels = iExpectedNumChannels(NumChannels)
+expectedNumChannels = NumChannels;
+if isempty(expectedNumChannels)
+    expectedNumChannels = NaN;
 end
 end

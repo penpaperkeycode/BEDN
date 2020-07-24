@@ -1,7 +1,8 @@
-classdef BinarizedConvolution2D < nnet.internal.cnn.layer.Layer
-    % BinarizedConvolution2D   Implementation of the 2D convolution layer
+classdef BinarizedConvolution2D < nnet.internal.cnn.layer.FunctionalLayer ...
+        & nnet.internal.cnn.layer.CPUFusableLayer
+    % Convolution2D   Implementation of the 2D convolution layer
     
-    %   Copyright 2015-2018 The MathWorks, Inc.
+    %   Copyright 2015-2019 The MathWorks, Inc.
     
     properties
         % LearnableParameters   Learnable parameters for the layer
@@ -66,6 +67,12 @@ classdef BinarizedConvolution2D < nnet.internal.cnn.layer.Layer
         PaddingMode
     end
     
+    properties(Access = public)
+        
+        % QuantizationMethod Quantization method for learnable parameters
+        QuantizationMethod
+    end
+    
     properties(Access = private)
         ExecutionStrategy
         CacheHandle
@@ -76,11 +83,22 @@ classdef BinarizedConvolution2D < nnet.internal.cnn.layer.Layer
         % Learnable Parameters (nnet.internal.cnn.layer.LearnableParameter)
         Weights
         Bias
+        Learnables        
+    end
+    
+    properties(SetAccess=protected, GetAccess=?nnet.internal.cnn.dlnetwork)
+        LearnablesNames = ["Weights" "Bias"]
     end
     
     properties (Dependent, SetAccess = private)
         % Effective filter size which takes into account dilation
         EffectiveFilterSize
+        
+        % Expected Weights size
+        ExtWeightsSize
+        
+        % Expected Bias size
+        ExtBiasSize
     end
     
     properties (Constant, Access = private)
@@ -96,7 +114,7 @@ classdef BinarizedConvolution2D < nnet.internal.cnn.layer.Layer
     methods
         function this = BinarizedConvolution2D( ...
                 name, filterSize, numChannels, numFilters, stride, dilationFactor, paddingMode, paddingSize)
-            % BinarizedConvolution2D   Constructor for a BinarizedConvolution2D layer
+            % Convolution2D   Constructor for a Convolution2D layer
             %
             %   Create a 2D convolutional layer with the following
             %   compulsory parameters:
@@ -131,8 +149,21 @@ classdef BinarizedConvolution2D < nnet.internal.cnn.layer.Layer
             this.CacheHandle = nnet.internal.cnn.layer.learnable.CacheHandle();
             this.Weights = nnet.internal.cnn.layer.learnable.PredictionLearnableParameter();
             this.Bias = nnet.internal.cnn.layer.learnable.PredictionLearnableParameter();
+            % Set default initializers. convolution2dLayer overwrites these
+            % values, which are set only for internal code that bypasses
+            % convolution2dLayer.
+            this.Weights.Initializer = iInternalInitializer('narrow-normal');
+            this.Bias.Initializer = iInternalInitializer('zeros');
+            
             this = this.setHostStrategy();
             this.IsTraining = false;
+            
+            % Initialize QuantizationMethod
+            this.QuantizationMethod = nnet.internal.cnn.layer.NoQuantization;
+            
+            % Convolution2D layer needs X but not Z for the backward pass
+            this.NeedsXForBackward = true;
+            this.NeedsZForBackward = false;
         end
         
         function Z = predict( this, X )
@@ -140,7 +171,7 @@ classdef BinarizedConvolution2D < nnet.internal.cnn.layer.Layer
             if(this.usingFilterGroups())
                 Z = this.predictTwoFilterGroupsWithCaching( X );
             else
-                Z = this.forwardNormal( X );
+                Z = this.predictNormal( X );
             end
         end
         
@@ -165,14 +196,19 @@ classdef BinarizedConvolution2D < nnet.internal.cnn.layer.Layer
         end
         
         function this = inferSize(this, inputSize)
-            % inferSize     Infer the number of channels based on the input size
-            numChannels = iNumChannelsFromInputSize(inputSize);
-            if this.usingFilterGroups()
-                % For filter groups, the number of channels is half the
-                % size
-                numChannels = numChannels/2;
+            % inferSize     Infer the number of channels and padding if
+            % same based on the input size
+            if isempty(this.Weights.Value)
+                % Reset NumChannels only if empty weights. This assumes
+                % that if weights are set, NumChannels is set correctly.
+                numChannels = iNumChannelsFromInputSize(inputSize);
+                if this.usingFilterGroups()
+                    % For filter groups, the number of channels is half the
+                    % size
+                    numChannels = numChannels/2;
+                end
+                this.NumChannels = numChannels;
             end
-            this.NumChannels = numChannels;
             
             if iIsTheStringSame(this.PaddingMode)
                 this.PaddingSize = iCalculateSamePadding( ...
@@ -190,14 +226,19 @@ classdef BinarizedConvolution2D < nnet.internal.cnn.layer.Layer
         function tf = isValidInputSize(this, inputSize)
             % isValidInputSize   Check if the layer can accept an input of
             % a certain size
-            tf = this.isFilterSizeSmallerThanImage( inputSize ) && ...
+            tf = numel(inputSize)==3 && ...
+                this.isFilterSizeSmallerThanImage( inputSize ) && ...
                 this.numFilterChannelsMatchesNumImageChannels( inputSize );
         end
         
         function outputSize = forwardPropagateSize(this, inputSize)
             % forwardPropagateSize    Output the size of the layer based on
             % the input size
-            heightAndWidthPadding = iCalculateHeightAndWidthPadding(this.PaddingSize);
+            paddingSize = iCalculatePaddingSizeFromInputSize( ...
+                this.PaddingMode, this.PaddingSize, this.EffectiveFilterSize, ...
+                this.Stride, inputSize(1:2));
+            
+            heightAndWidthPadding = iCalculateHeightAndWidthPadding(paddingSize);
             outputHeightAndWidth = floor((inputSize(1:2) + ...
                 heightAndWidthPadding - this.EffectiveFilterSize)./this.Stride) + 1;
             outputSize = [outputHeightAndWidth sum(this.NumFilters)];
@@ -210,7 +251,8 @@ classdef BinarizedConvolution2D < nnet.internal.cnn.layer.Layer
             if isempty(this.Weights.Value)
                 % Initialize only if it is empty
                 weightsSize = [this.FilterSize, this.NumChannels, sum(this.NumFilters)];
-                this.LearnableParameters(this.WeightsIndex).Value = iInitializeGaussian( weightsSize, precision );
+                weights = this.Weights.Initializer.initialize(weightsSize, 'Weights');
+                this.Weights.Value = precision.cast(weights);
             else
                 % Cast to desired precision
                 this.Weights.Value = precision.cast(this.Weights.Value);
@@ -219,7 +261,8 @@ classdef BinarizedConvolution2D < nnet.internal.cnn.layer.Layer
             if isempty(this.Bias.Value)
                 % Initialize only if it is empty
                 biasSize = [1, 1, sum(this.NumFilters)];
-                this.LearnableParameters(this.BiasIndex).Value = iInitializeConstant( biasSize, precision );
+                bias = this.Bias.Initializer.initialize(biasSize, 'Bias');
+                this.Bias.Value = precision.cast(bias);
             else
                 % Cast to desired precision
                 this.Bias.Value = precision.cast(this.Bias.Value);
@@ -271,7 +314,10 @@ classdef BinarizedConvolution2D < nnet.internal.cnn.layer.Layer
         % giving a name to each index of the vector
         function weights = get.Weights(this)
             weights = this.LearnableParameters(this.WeightsIndex);
-            weights.Value=max(-1,min(1,weights.Value)); %%%%%%%%%%%%%%%%%%%%%%%%%
+%             weights.Value=sign(weights.Value); %%%%%%%%%%%%%%%%%%%%%%%%%  Binarize Weights When training is finished
+%             weights.Value(weights.Value==0)=1; %%%%%%%%%%%%%%%%%%%%%%%%%  Binarize Weights When training is finished
+            weights.Value(weights.Value>1)=1; %%%%%%%%%%%%%%%%%%%%%%%%% 
+            weights.Value(weights.Value<-1)=-1; %%%%%%%%%%%%%%%%%%%%%%%%%  
         end
         
         function this = set.Weights(this, weights)
@@ -292,6 +338,25 @@ classdef BinarizedConvolution2D < nnet.internal.cnn.layer.Layer
             end
         end
         
+        function learnables = get.Learnables(this)
+            % Assume setupForFunctional has been called
+            w = this.Weights.Value;
+            b = this.Bias.Value;
+            learnables = {w, b};
+        end
+        
+        function this = set.Learnables(this, learnables)
+            % Assume setupForFunctional has been called
+            nnet.internal.cnn.layer.paramvalidation.assertValidLearnables(learnables{1}, this.ExtWeightsSize);
+            nnet.internal.cnn.layer.paramvalidation.assertValidLearnables(learnables{2}, this.ExtBiasSize);
+            
+            this.LearnableParameters(this.WeightsIndex).Value = learnables{1};
+            this.LearnableParameters(this.BiasIndex).Value = learnables{2};
+            if ~this.CacheHandle.isEmpty
+                this.CacheHandle.clearCache;
+            end
+        end
+        
         function dilatedFilterSize = get.EffectiveFilterSize(this)
             % Dilation is equivalent to adding extra zeros in between the
             % elements of the filter so that it leads to the following
@@ -301,6 +366,38 @@ classdef BinarizedConvolution2D < nnet.internal.cnn.layer.Layer
             % or, simplifying:
             dilatedFilterSize = (this.FilterSize - 1) .* this.DilationFactor + 1;
         end
+        
+        function sz = get.ExtWeightsSize(this)
+            if(this.usingFilterGroups)
+                expectedNumChannels = iExpectedNumChannels(this.NumChannels(1));
+            else
+                expectedNumChannels = iExpectedNumChannels(this.NumChannels);
+            end
+            sz = [this.FilterSize expectedNumChannels sum(this.NumFilters)];
+        end
+        
+        function sz = get.ExtBiasSize(this)
+            sz = [1 1 sum(this.NumFilters)];
+        end
+        
+        function this = accept(this, visitor)
+            % accept  Accept a layer visitor and call its visit method
+            %
+            %   layer = accept(layer, visitor) requests that the layer accepts a
+            %   LayerVisitor object.  Convolution2D calls the visitConvolution2D method
+            %   on the visitor.
+            
+            this = visitConvolution2D(visitor, this);
+        end
+        
+        function this = clearPredictionCache(this)
+            % clearPredictionCache  Reset caches that depend on learnable values 
+            %
+            %   clearPredictionCache(layer) ensures that caches that depend on
+            %   learnable parameters are emptied.
+            
+            this.CacheHandle = nnet.internal.cnn.layer.learnable.CacheHandle();
+        end 
     end
     
     methods(Access = private)
@@ -310,6 +407,12 @@ classdef BinarizedConvolution2D < nnet.internal.cnn.layer.Layer
         
         function [Z, memory] = forwardNormal( this, X )
             Z = this.doForward(X,this.Weights.Value,this.Bias.Value);
+            memory = [];
+        end
+        
+        function [Z, memory] = predictNormal( this, X )
+            [weights0,bias0] = this.QuantizationMethod.remapped(this.Weights.Value,this.Bias.Value);
+            Z = this.doForward(X,weights0,bias0);
             memory = [];
         end
         
@@ -329,8 +432,9 @@ classdef BinarizedConvolution2D < nnet.internal.cnn.layer.Layer
                 [X1,X2] = iSplitDataAlongThirdDimension(X, this.NumChannels);
                 
                 if this.CacheHandle.isEmpty
-                    [weights1, weights2] = iSplitWeightsAlongFourthDimension(this.Weights.Value, this.NumFilters);
-                    [bias1, bias2] = iSplitBiasAlongThirdDimension(this.Bias.Value, this.NumFilters);
+                    [weights0,bias0] = this.QuantizationMethod.remapped(this.Weights.Value,this.Bias.Value);
+                    [weights1, weights2] = iSplitWeightsAlongFourthDimension(weights0, this.NumFilters);
+                    [bias1, bias2] = iSplitBiasAlongThirdDimension(bias0, this.NumFilters);
                     split.weights1 = weights1;
                     split.weights2 = weights2;
                     split.bias1 = bias1;
@@ -373,9 +477,13 @@ classdef BinarizedConvolution2D < nnet.internal.cnn.layer.Layer
         function Z = doForward(this, X, weights, bias)
             % Note that padding is stored as [top bottom left right] but
             % the function expects [top left bottom right].
+            inputSize = [size(X,1) size(X,2)];
+            paddingSize = iCalculatePaddingSizeFromInputSize( ...
+                this.PaddingMode, this.PaddingSize, this.EffectiveFilterSize, ...
+                this.Stride, inputSize );
             Z = this.ExecutionStrategy.forward(X, weights, bias, ...
-                this.PaddingSize(1), this.PaddingSize(3), ...
-                this.PaddingSize(2), this.PaddingSize(4), ...
+                paddingSize(1), paddingSize(3), ...
+                paddingSize(2), paddingSize(4), ...
                 this.Stride(1), this.Stride(2), ...
                 this.DilationFactor(1), this.DilationFactor(2));
         end
@@ -407,10 +515,14 @@ classdef BinarizedConvolution2D < nnet.internal.cnn.layer.Layer
         function varargout = doBackward(this, X, weights, dZ)
             % Note that padding is stored as [top bottom left right] but
             % the function expects [top left bottom right].
+            inputSize = [size(X,1) size(X,2)];
+            paddingSize = iCalculatePaddingSizeFromInputSize( ...
+                this.PaddingMode, this.PaddingSize, this.EffectiveFilterSize, ...
+                this.Stride, inputSize );
             [varargout{1:nargout}] = this.ExecutionStrategy.backward( ...
                 X, weights, dZ, ...
-                this.PaddingSize(1), this.PaddingSize(3), ...
-                this.PaddingSize(2), this.PaddingSize(4), ...
+                paddingSize(1), paddingSize(3), ...
+                paddingSize(2), paddingSize(4), ...
                 this.Stride(1), this.Stride(2), ...
                 this.DilationFactor(1), this.DilationFactor(2));
         end
@@ -448,22 +560,35 @@ classdef BinarizedConvolution2D < nnet.internal.cnn.layer.Layer
             this.ExecutionStrategy = BinarizedConvolution2DGPUStrategy();
         end
     end
+    
+    methods(Access=protected)
+        function this = setFunctionalStrategy(this)
+            this.ExecutionStrategy = BinarizedConvolution2DFunctionalStrategy();
+        end
+    end
+    
+    methods (Hidden)
+        function layerArgs = getFusedArguments(layer)
+            % getFusedArguments  Returned the arguments needed to call the
+            % layer in a fused network.
+            import nnet.internal.cnn.layer.*
+            grps = layer.NumFilters;
+            padding = CPUGenericFusedLayer.shufflePadding(layer.PaddingSize);
+            b = layer.Bias.Value;
+            if ~any(b) && all(isfinite(b))
+                b = [];
+            end
+            layerArgs = { 'conv', layer.Weights.Value, ...
+                padding, layer.Stride, layer.DilationFactor, b, grps };
+        end
+        
+        function tf = isFusable(layer, precision, numDataDimensions)
+            % isFusable  Indicates if the layer is fusable in a given network.
+            tf = (numDataDimensions == 2) && (class(layer.Weights.Value) == precision);
+        end
+    end
 end
 
-function parameter = iInitializeGaussian(parameterSize, precision)
-parameter = precision.cast( ...
-    iNormRnd(0, 0.00000001, parameterSize) );   %%%%%%%%%%%
-end
-
-function parameter = iInitializeConstant(parameterSize, precision)
-parameter = precision.zeros(parameterSize);
-end
-
-function out = iNormRnd(mu, sigma, outputSize)
-% iNormRnd  Returns an array of size 'outputSize' chosen from a
-% normal distribution with mean 'mu' and standard deviation 'sigma'
-out = randn(outputSize) .* sigma + mu;
-end
 function [data1, data2] = iSplitDataAlongThirdDimension(data, numChannels)
 data1 = data(:,:,1:numChannels,:);
 data2 = data(:,:,numChannels + 1:2*numChannels,:);
@@ -495,8 +620,21 @@ else
 end
 end
 
+function expectedNumChannels = iExpectedNumChannels(NumChannels)
+expectedNumChannels = NumChannels;
+if isempty(expectedNumChannels)
+    expectedNumChannels = NaN;
+end
+end
+
 function tf = iIsTheStringSame(x)
 tf = nnet.internal.cnn.layer.padding.isTheStringSame(x);
+end
+
+function paddingSize = iCalculatePaddingSizeFromInputSize( ...
+    paddingMode, paddingSize, filterOrPoolSize, stride, spatialInputSize)
+paddingSize = nnet.internal.cnn.layer.padding.calculatePaddingSizeFromInputSize( ...
+    paddingMode, paddingSize, filterOrPoolSize, stride, spatialInputSize);
 end
 
 function heightAndWidthPadding = iCalculateHeightAndWidthPadding(paddingSize)
@@ -506,3 +644,11 @@ end
 function paddingSize = iCalculateSamePadding(filterSize, stride, inputSize)
 paddingSize = nnet.internal.cnn.layer.padding.calculateSamePadding(filterSize, stride, inputSize);
 end
+
+function initializer = iInternalInitializer(name)
+initializer = nnet.internal.cnn.layer.learnable.initializer...
+    .initializerFactory(name);
+end
+
+% LocalWords:  Learnable nnet cnn learnable convolutional Backpropagation
+% LocalWords:  Mkldnn Rnd dlarray

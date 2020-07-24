@@ -3,7 +3,7 @@ a=1;
 for i=1:size(Net.Layers,1)
     tmp_string=Net.Layers(i,1).Name;
     disp(tmp_string)
-    if ismethod(Net.Layers(i,1),'BinarizedConvolution2DLayer_LayerMaker')
+    if ismethod(Net.Layers(i,1),'Convolution2DLayer')
         
         
         if a ~=7

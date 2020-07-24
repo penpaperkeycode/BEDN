@@ -1,5 +1,5 @@
 classdef BinarizedConvolution2DHostStridedConvStrategy < nnet.internal.cnn.layer.util.ExecutionStrategy
-    % BinarizedConvolution2DHostStridedConvStrategy   Execution strategy for running the convolution on the host
+    % Convolution2DHostStridedConvStrategy   Execution strategy for running the convolution on the host
     
     %   Copyright 2017-2018 The MathWorks, Inc.
     
@@ -11,18 +11,16 @@ classdef BinarizedConvolution2DHostStridedConvStrategy < nnet.internal.cnn.layer
                 verticalStride, horizontalStride, ...
                 verticalDilation, horizontalDilation)
             
-            weights= sign(weights);  %%%%%%%
-            weights(weights==0)=1;
-            
+            weights= sign(weights);  %%%%%%%%%%%%%%%%%%%%%
+            weights(weights==0)=1;  %%%%%%%%%%%%%%%%%%%%%
             
             Z = nnet.internal.cnnhost.stridedConv( ...
                 X, weights, ...
                 topPad, leftPad, ...
                 bottomPad, rightPad, ...
                 verticalStride, horizontalStride, ...
-                verticalDilation, horizontalDilation);
+                verticalDilation, horizontalDilation, bias);
             
-            Z = Z + bias;
             memory = [];
         end
         
@@ -35,9 +33,10 @@ classdef BinarizedConvolution2DHostStridedConvStrategy < nnet.internal.cnn.layer
             
             needsWeightGradients = nargout > 1;
             
-            weights= sign(weights);  %%%%%%%
-            weights(weights==0)=1;
             
+            weightsFP=weights;    %%%%%%%%%%%%%%%%%%%%%
+            weights= sign(weights);  %%%%%%%%%%%%%%%%%%%%%
+            weights(weights==0)=1;  %%%%%%%%%%%%%%%%%%%%%
             
             dX = nnet.internal.cnnhost.convolveBackwardData2D( ...
                 X, weights, dZ, ...
@@ -46,6 +45,9 @@ classdef BinarizedConvolution2DHostStridedConvStrategy < nnet.internal.cnn.layer
                 strideHeight, strideWidth, ...
                 verticalDilation, horizontalDilation);
             if needsWeightGradients
+                
+                weights=weightsFP; %%%%%%%%%%%%%%%%%
+                
                 dW{1} = nnet.internal.cnnhost.convolveBackwardFilter2D( ...
                     X, weights, dZ, ...
                     topPad, leftPad, ...

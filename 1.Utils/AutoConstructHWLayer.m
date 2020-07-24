@@ -4,6 +4,9 @@ function HardwareLayers=AutoConstructHWLayer(Net)
 HardwareLayers=[];
 conv_memory1=[];
 conv_memory2=[];
+first_conv_finder=[];
+Xilinx=1;
+lastBatchScaleOn=1; %For Last Layer's Output Precision
 
 for i=1:size(Net.Layers,1)
     tmp_string=Net.Layers(i,1).Name;
@@ -19,26 +22,80 @@ for i=1:size(Net.Layers,1)
         BatchBias1d=(  (  sqrt(Variance1d).*Offset1d./(Scale1d+epsilon)  )  -Mean1d   );
         Scale_sign=sign(Scale1d); %check Guinness paper, they were wrong about BatchNorm equation.
         BatchBias1d=Scale_sign.*BatchBias1d; %For Right assumption, cross their own sign.
-
+        
+        OutputScale=abs(Scale1d)./sqrt(Variance1d+epsilon); %For Last Layer's Output Precision
+        
         HardwareLayers(conv_memory2,1).Weights= sign(Net.Layers(conv_memory1, 1).Weights)  ;
-        HardwareLayers(conv_memory2,1).Bias= floor(Net.Layers(conv_memory1,1).Bias+BatchBias1d ) ;
-
+        HardwareLayers(conv_memory2,1).Weights(HardwareLayers(conv_memory2,1).Weights==0)=1 ;
+        
+        if Scale_sign<0  % Check the rule when Gamma equals zero
+            HardwareLayers(conv_memory2,1).Weights(HardwareLayers(conv_memory2,1).Weights==1)=2 ;
+            HardwareLayers(conv_memory2,1).Weights(HardwareLayers(conv_memory2,1).Weights==-1)=1 ;
+            HardwareLayers(conv_memory2,1).Weights(HardwareLayers(conv_memory2,1).Weights==2)=-1 ;
+        end
+        
+        
+        if first_conv_finder==1 && Xilinx==1
+            bias1d_obj = sfi(Net.Layers(conv_memory1,1).Bias + BatchBias1d,24,8);
+            Xvalue=double(str2num(bias1d_obj.Value));
+            Xvalue=reshape(Xvalue,[1,1,64]);
+            %             Ztmp=Net.Layers(conv_memory1,1).Bias + BatchBias1d;
+            %             Zmod=mod(Ztmp,0.00390625);%1/256 24bit quantization
+            %             Xvalue=Ztmp-Zmod;
+            HardwareLayers(conv_memory2,1).Bias=Xvalue;% Net.Layers(conv_memory1,1).Bias + BatchBias1d;
+        else
+            if ismethod(HardwareLayers(conv_memory2,1),'FullyConnectedLayer')
+                HardwareLayers(conv_memory2,1).Bias= floor(Net.Layers(conv_memory1,1).Bias + reshape(BatchBias1d,10,1) ); %CIFAR10
+            else
+                HardwareLayers(conv_memory2,1).Bias= floor(Net.Layers(conv_memory1,1).Bias + BatchBias1d );
+            end
+        end
         conv_memory1=[];
         conv_memory2=[];
         
-    elseif ismethod(Net.Layers(i,1),'BinarizedConvolution2DLayerFixer')
-        
+    elseif ismethod(Net.Layers(i,1),'Convolution2DLayer')
+        if isempty(first_conv_finder)
+            first_conv_finder=1;
+        else
+            first_conv_finder=2;
+        end
         HardwareLayers=[
             HardwareLayers;
             convolution2dLayer(Net.Layers(i,1).FilterSize, ...
             Net.Layers(i,1).NumFilters, ...
-            'Padding',Net.Layers(i,1).PaddingSize, ...
+            'Padding',Net.Layers(i,1).PaddingSize, ... %             'Padding','same', ... %             'PaddingSize',Net.Layers(i,1).PaddingSize, ...
             'Stride',Net.Layers(i,1).Stride, ...
             'Name',Net.Layers(i,1).Name)
             ];
         conv_memory1=i;
         conv_memory2=size(HardwareLayers,1);
         
+    elseif ismethod(Net.Layers(i,1),'TransposedConvolution2DLayer')
+        HardwareLayers=[
+            HardwareLayers;
+            transposedConv2dLayer(Net.Layers(i,1).FilterSize, ...
+            Net.Layers(i,1).NumFilters, ...
+            'Cropping','same', ..., ...%'same', ... %'CroppingSize',Net.Layers(i,1).CroppingSize, ...
+            'Stride',Net.Layers(i,1).Stride, ...
+            'BiasLearnRateFactor',0,...
+            'Name',Net.Layers(i,1).Name)
+            ];
+        conv_memory1=i;
+        conv_memory2=size(HardwareLayers,1);
+        
+    elseif ismethod(Net.Layers(i,1),'FullyConnectedLayer')
+        if isempty(first_conv_finder)
+            first_conv_finder=1;
+        else
+            first_conv_finder=2;
+        end
+        HardwareLayers=[
+            HardwareLayers;
+            fullyConnectedLayer(Net.Layers(i,1).OutputSize, ...
+            'Name',Net.Layers(i,1).Name)
+            ];
+        conv_memory1=i;
+        conv_memory2=size(HardwareLayers,1);
     else
         HardwareLayers=[
             HardwareLayers;
@@ -47,11 +104,14 @@ for i=1:size(Net.Layers,1)
     end
 end
 
-% HardwareLayers=[
-%     HardwareLayers(1,1);
-%     FloorLayer('floor')
-%     HardwareLayers(2:end,1)
-%     ];
+if lastBatchScaleOn==1
+    OutputScale_8bit = sfi(OutputScale,8);
+    HardwareLayers=[
+        HardwareLayers(1:end-2);
+        OutputScaleLayer(OutputScale_8bit,'OutputScale')
+        HardwareLayers(end-1:end);
+        ];
+end
 
 % figure('Units','normalized','Position',[0 0.1 0.3 0.8]);
 % plot(layerGraph(HardwareLayers))

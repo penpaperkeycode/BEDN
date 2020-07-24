@@ -1,9 +1,9 @@
-% SimNet, TripleLayerNet
-% Xdata=cat(4,XTrain,XValidation);
-% Ydata=cat(1,YTrain,YValidation);
-Xdata=XValidation;
-Ydata=YValidation;
+imds = imageDatastore('E:\Datasets\Stanford_Dog_Dataset\Images', ...
+    'IncludeSubfolders',true, ...
+    'LabelSource','foldernames');
     
+inputSize = [32 32];
+imds.ReadFcn = @(loc)imresize(imread(loc),inputSize);
 % %============================:Raw Image Flatten:========================%
 % featuresOut=[];
 % tic
@@ -18,14 +18,14 @@ Ydata=YValidation;
 % featuresOut=single(featuresOut);
 % toc
 
-
+featuresOut2=activations(OriginNet,read(imds),OriginNet.Layers(23,1).Name,'OutputAs','rows');
 %============================:Feature Extraction:======================%
 featuresOut=[];
 tic
 for i=1:size(Xdata,4)
     featuresOut = [
         featuresOut;
-        activations(SimNet,Xdata(:,:,:,i),SimNet.Layers(1,1).Name,'OutputAs','rows','MiniBatchSize',1000)
+        activations(OriginNet,Xdata(:,:,:,i),OriginNet.Layers(23,1).Name,'OutputAs','rows')
         ];
     percentage=(i/size(Xdata,4))*100
     
@@ -33,9 +33,9 @@ end
 toc
 
 rng default % for reproducibility
-Y = tsne(featuresOut,'Algorithm','barneshut','Perplexity',50,'NumPCAComponents',0);
+Y2 = tsne(featuresOut2,'Algorithm','barneshut','Perplexity',50,'NumPCAComponents',128);
 figure
-gscatter(Y(:,1),Y(:,2),Ydata)
+gscatter(Y2(:,1),Y2(:,2),imds.Labels)
 grid on
 
 

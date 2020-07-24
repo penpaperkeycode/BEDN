@@ -1,0 +1,29 @@
+classdef BinarizedConvolution2DFunctionalStrategy < ...
+        nnet.internal.cnn.layer.util.FunctionalStrategy
+    % Convolution2DFunctionalStrategy    dlarray method strategy
+    
+    %   Copyright 2019 The MathWorks, Inc.
+    
+    methods
+        function [Z, memory] = forward(~, X, ...
+                weights, bias, ...
+                topPad, leftPad, ...
+                bottomPad, rightPad, ...
+                verticalStride, horizontalStride, ...
+                verticalDilation, horizontalDilation)
+            
+            assert( isa(X, 'dlarray') && ~isempty(dims(X)) )
+            
+            weights= sign(weights);  %%%%%%%%%%%%%%%%%%%%%
+            weights(weights==0)=1;  %%%%%%%%%%%%%%%%%%%%%
+            
+            % TODO: use internal API
+            Z = dlconv(X, weights, bias, ...
+                'Stride', [verticalStride, horizontalStride], ...
+                'DilationFactor', [verticalDilation, horizontalDilation], ...
+                'Padding', [topPad, leftPad; bottomPad, rightPad]);
+            
+            memory = [];
+        end
+    end
+end
