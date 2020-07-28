@@ -17,8 +17,9 @@ cmap = camvidColorMap;
 % labelIDs = camvidPixelLabelIDs();
 numClasses = numel(classes);
 
-% outputFolder = fullfile(tempdir,'CamVid');
-outputFolder = 'C:\NeuralNetwork\SegNet-Tutorial-master\SegNet-Tutorial-master\CamVid';
+root1=pwd;
+outputFolder = fullfile(root1,'3.Dataset\CamVid');
+
 TrainDB=fullfile(outputFolder,'train');
 TrainLabel = fullfile(outputFolder,'trainannot');
 ValDB=fullfile(outputFolder,'val');

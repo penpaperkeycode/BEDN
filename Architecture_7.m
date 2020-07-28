@@ -1,33 +1,29 @@
 %===========================:Prepare Data:===========================%
-imageSize = [128 128 3] ; %[360 480 3];
-imageFolder='C:\Works\NeuralNetworks\Datasets\vggface2_train\vggface2_train\train';
+%Download the CIFAR-10 data set.
+datadir = tempdir;
+url = 'https://www.cs.toronto.edu/~kriz/cifar-10-matlab.tar.gz';
+helperCIFAR10Data.download(url,datadir);
 
-imds = imageDatastore(imageFolder,'IncludeSubfolders',true,'LabelSource','foldernames');
-catsize=size(unique(imds.Labels),1);
+%Load the CIFAR-10 images and use the CIFAR-10 test images for network validation.
+[XTrain,YTrain,XValidation,YValidation] = helperCIFAR10Data.load(datadir);
+% load('G:\Work\NeuralNetwork\QuantizedNeuralNetwork\BinarizedNeuralNetwork\DevelopmentHistoryBackup\Phase6_Stabilization\CIFARFACE5\matlab.mat')
 
-resizedimageFolderTitle=['labelsResized_',num2str(imageSize(1))];
-resizedimageFolder = fullfile(imageFolder,resizedimageFolderTitle,filesep);
-imds = resizeImdImages(imds,resizedimageFolder,imageSize);
+catsize=size(unique(YValidation),1);
 
+imageSize = [32 32 3];
 pixelRange = [-3 3];
 % rotateRange= [-3 3];
 % scaleRange=[0.9 1.1];
 % shearRange= [-5 5];
+
 imageAugmenter = imageDataAugmenter( ...
     'RandXReflection',true, ...
     'RandXTranslation',pixelRange, ...
     'RandYTranslation',pixelRange);
-augimdsTrain = augmentedImageDatastore(imageSize,imds, ...
-    'DataAugmentation',imageAugmenter, ...
-    'ColorPreprocessing','gray2rgb',...
-    'DispatchInBackground',true,...
-    'OutputSizeMode','resize');
-%'resize','randcrop'
-%     'RandXScale',scaleRange,'RandYScale',scaleRange, ...
-%     'RandRotation',rotateRange, ...
-%     'RandXShear',shearRange,'RandYShear',shearRange, ...
-%     'RandYReflection',true, ...
-%     'RandXReflection',true, ...
+
+% imageAugmenter = imageDataAugmenter();
+augimdsTrain = augmentedImageDatastore(imageSize,XTrain,YTrain, ...
+    'DataAugmentation',imageAugmenter);
 
 
 %====================:Define Network Architecture:====================%
