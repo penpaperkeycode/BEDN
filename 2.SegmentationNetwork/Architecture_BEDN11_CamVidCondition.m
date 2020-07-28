@@ -12,10 +12,8 @@ classes = [
     "Pedestrian"
     "Bicyclist"
     ];
-
-cmap = camvidColorMap;
-% labelIDs = camvidPixelLabelIDs();
 numClasses = numel(classes);
+cmap = camvidColorMap;
 
 root1=pwd;
 outputFolder = fullfile(root1,'3.Dataset\CamVid');
@@ -27,6 +25,8 @@ ValLabel = fullfile(outputFolder,'valannot');
 TestDB=fullfile(outputFolder,'test');
 TestLabel = fullfile(outputFolder,'testannot');
 
+labelIDs = camvidPixelLabelIDs();
+pxds = pixelLabelDatastore(TrainLabel,classes,labelIDs);
 labelIDs = 1:numel(pxds.ClassNames);
 pxds = pixelLabelDatastore(TrainLabel,classes,labelIDs);
 
