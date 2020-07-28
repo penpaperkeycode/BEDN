@@ -28,6 +28,7 @@ TestLabel = fullfile(outputFolder,'testannot');
 labelIDs = camvidPixelLabelIDs();
 pxds = pixelLabelDatastore(TrainLabel,classes,labelIDs);
 labelIDs = 1:numel(pxds.ClassNames);
+% labelIDs=labelIDs-1;
 pxds = pixelLabelDatastore(TrainLabel,classes,labelIDs);
 
 imdsTrain = imageDatastore(TrainDB);

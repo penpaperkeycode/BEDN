@@ -1,6 +1,5 @@
 function cmap = camvidColorMap()
 % Define the colormap used by CamVid dataset.
-
 cmap = [
     128 128 128   % Sky
     128 0 0       % Building

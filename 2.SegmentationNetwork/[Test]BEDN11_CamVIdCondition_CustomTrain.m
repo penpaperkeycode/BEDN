@@ -1,4 +1,4 @@
-imageSize = [360 480 3]; 
+imageSize = [360 480 3];
 classes = [
     "Sky"
     "Building"
@@ -12,12 +12,13 @@ classes = [
     "Pedestrian"
     "Bicyclist"
     ];
-numClasses = numel(classes);
+
 cmap = camvidColorMap;
+labelIDs = camvidPixelLabelIDs();
+numClasses = numel(classes);
 
-root1=pwd;
-outputFolder = fullfile(root1,'3.Dataset\CamVid');
-
+% outputFolder = fullfile(tempdir,'CamVid');
+outputFolder = 'C:\NeuralNetwork\SegNet-Tutorial-master\SegNet-Tutorial-master\CamVid';
 TrainDB=fullfile(outputFolder,'train');
 TrainLabel = fullfile(outputFolder,'trainannot');
 ValDB=fullfile(outputFolder,'val');
@@ -25,18 +26,18 @@ ValLabel = fullfile(outputFolder,'valannot');
 TestDB=fullfile(outputFolder,'test');
 TestLabel = fullfile(outputFolder,'testannot');
 
-labelIDs = camvidPixelLabelIDs();
 pxds = pixelLabelDatastore(TrainLabel,classes,labelIDs);
 labelIDs = 1:numel(pxds.ClassNames);
 % labelIDs=labelIDs-1;
-pxds = pixelLabelDatastore(TrainLabel,classes,labelIDs);
+% pxds = pixelLabelDatastore(TrainLabel,classes,labelIDs);
+
 
 imdsTrain = imageDatastore(TrainDB);
-pxdsTrain = pixelLabelDatastore(TrainLabel,classes,labelIDs);
+pxdsTrain = pixelLabelDatastore(TrainLabel,pxds.ClassNames,labelIDs);
 imdsVal = imageDatastore(ValDB);
-pxdsVal = pixelLabelDatastore(ValLabel,classes,labelIDs);
+pxdsVal = pixelLabelDatastore(ValLabel,pxds.ClassNames,labelIDs);
 imdsTest = imageDatastore(TestDB);
-pxdsTest = pixelLabelDatastore(TestLabel,classes,labelIDs);
+pxdsTest = pixelLabelDatastore(TestLabel,pxds.ClassNames,labelIDs);
 
 pximds = pixelLabelImageDatastore(imdsTrain,pxdsTrain);
 pximdsVal = pixelLabelImageDatastore(imdsVal,pxdsVal);
@@ -88,7 +89,6 @@ TailLayer=[
     Binarizedconvolution2dLayer(3,numClasses,'Padding','same','Stride',1,'BiasLearnRateFactor',0,'Name','binConv11')
     batchNormalizationLayer('Name','BatchNorm11')
     softmaxLayer('Name', 'softmax')
-    pixelClassificationLayer('Name', 'labels')
     ];
 
 layers=[
@@ -98,90 +98,84 @@ layers=[
 
 lgraph=layerGraph(layers);
 
-tbl = countEachLabel(pxds)
-numTrainingImages = numel(imdsTrain.Files)
-numTestingImages = numel(imdsTest.Files)
+dlnet = dlnetwork(lgraph);
 
-imageFreq = tbl.PixelCount ./ tbl.ImagePixelCount;
-classWeights = median(imageFreq) ./ imageFreq
-
-pxLayer = pixelClassificationLayer('Name','labels','ClassNames',tbl.Name,'ClassWeights',classWeights);
-lgraph = removeLayers(lgraph,'labels');
-lgraph = addLayers(lgraph, pxLayer);
-lgraph = connectLayers(lgraph,'softmax','labels');
-
-% lgraph = createLgraphUsingConnections(OriginNet.Layers,OriginNet.Connections)
-
-% pximds = pixelLabelImageDatastore(imdsTrain,pxdsTrain,...
-%     'DataAugmentation',augmenter,'OutputSize',[240,352,3]);
-
-learnRate=1*1e-3; %learnRate=1e-6;
+numEpochs=5000;
 miniBatchSize=8;
-valFrequency = floor(421/miniBatchSize);
-MaxEpochs=5000;
-options = trainingOptions('sgdm', ...
-    'InitialLearnRate',learnRate,...
-    'LearnRateSchedule','piecewise',...
-    'LearnRateDropPeriod',4000,...
-    'LearnRateDropFactor',0.1,...
-    'MaxEpochs',MaxEpochs, ...
-    'MiniBatchSize',miniBatchSize, ...
-    'Shuffle','every-epoch', ...
-    'Plots','training-progress',...
-    'Verbose',true, ...   % For txtal progress checking
-    'VerboseFrequency',valFrequency,...
-    'ExecutionEnvironment','gpu');
-%     'Plots','training-progress',...
+initialLearnRate=1*1e-3; %learnRate=1e-6;
+decay = 0.01;
+momentum = 0.9;
+plots = "training-progress";
+executionEnvironment = "gpu"; %'auto'
 
-[OriginNet, info] = trainNetwork(pximds,lgraph,options);
+if plots == "training-progress"
+    figure
+    lineLossTrain = animatedline('Color',[0.85 0.325 0.098]);
+    ylim([0 inf])
+    xlabel("Iteration")
+    ylabel("Loss")
+    grid on
+end
 
+velocity = []; %for SGDM
 
-I = read(imdsTest);
-C = semanticseg(I, OriginNet);
+numObservations = numel(imdsTrain.Files); %numel(YTrain);
+numIterationsPerEpoch = floor(numObservations./miniBatchSize);
+iteration = 0;
+start = tic;
 
-B = labeloverlay(I,C,'Colormap',cmap,'Transparency',0.5);
-figure(1)
-imshow(B)
-pixelLabelColorbar(cmap, classes);
+pximds.MiniBatchSize = miniBatchSize;
 
-figure(2)
-imshow(I)
-
-expectedResult = read(pxdsTest);
-actual = uint8(C{:});
-expected = uint8(expectedResult);
-imshowpair(actual, expected)
-
-iou = jaccard(C, expectedResult);
-table(classes,iou)
-
-pxdsResults = semanticseg(imdsTest,OriginNet,'WriteLocation',tempdir,'Verbose',false,'MiniBatchSize',miniBatchSize);
-
-metrics = evaluateSemanticSegmentation(pxdsResults,pxdsTest,'Verbose',true);
-
-metrics.DataSetMetrics
-
-metrics.ClassMetrics
-
-
-%
-% learnRate=1e-7;
-% miniBatchSize=4;
-% valFrequency = floor(421/miniBatchSize);
-% MaxEpochs=50;
-% options2 = trainingOptions('adam', ...
-%     'InitialLearnRate',learnRate,...
-%     'MaxEpochs',MaxEpochs, ...
-%     'MiniBatchSize',miniBatchSize, ...
-%     'Shuffle','every-epoch', ...
-%     'Plots','training-progress',...
-%     'Verbose',true, ...   % For txtal progress checking
-%     'VerboseFrequency',valFrequency,...
-%     'LearnRateSchedule','piecewise',...
-%     'LearnRateDropFactor',0.1,...
-%     'LearnRateDropPeriod',ceil(MaxEpochs/10),...
-%     'ExecutionEnvironment','gpu');
-% %     'Plots','training-progress',...
-% lgraph2=createLgraphUsingConnections(BinSegNet.Layers,BinSegNet.Connections);
-% [BinSegNet_learnrateDrop, info_learrateDrop] = trainNetwork(pximds,lgraph2,options2);
-%
+% Loop over epochs.
+for epoch = 1:numEpochs
+    % Reset and shuffle the datastore.
+    reset(pximds);
+    pximds = shuffle(pximds);
+    
+    % Loop over mini-batches.
+    while hasdata(pximds)
+        iteration = iteration + 1;
+        
+        % Read a mini-batch of data.
+        pximdsXBatch = read(pximds);
+        workerXBatch = cat(4,pximdsXBatch.inputImage{:});
+%         workerNumObservations = numel(pximdsXBatch.pixelLabelImage);
+        
+        % Normalize the images.
+        workerXBatch =  single(workerXBatch) ./ 255;
+        
+        workerY= cat(4,pximdsXBatch.pixelLabelImage{:});
+        workerY=double(workerY);
+%         % Convert the labels to dummy variables.
+%         workerY = zeros(numClasses,workerNumObservations,'single');
+%         for c = 1:numClasses
+%             workerY(c,pximdsXBatch.pixelLabelImage==classes(c)) = 1;
+%         end
+        
+        % Convert the mini-batch of data to dlarray.
+        dlworkerX = dlarray(workerXBatch,'SSCB');
+        
+        % If training on GPU, then convert data to gpuArray.
+        if executionEnvironment == "gpu"
+            dlworkerX = gpuArray(dlworkerX);
+        end
+        
+        % Evaluate the model gradients and loss on the worker.
+        [workerGradients,dlworkerLoss,workerState] = dlfeval(@modelGradients_spatialentropy,dlnet,dlworkerX,workerY);
+        dlnet.State = workerState;
+        
+        % Determine learning rate for time-based decay learning rate schedule.
+        learnRate = initialLearnRate/(1 + decay*iteration);
+        
+        % Update the network parameters using the SGDM optimizer.
+        [dlnet.Learnables,velocity] = sgdmupdate(dlnet.Learnables,workerGradients,velocity,learnRate,momentum);
+        
+        % Display the training progress.
+        if plots == "training-progress"
+            D = duration(0,0,toc(start),'Format','hh:mm:ss');
+            addpoints(lineLossTrain,iteration,double(gather(extractdata(dlworkerLoss))))
+            title("Epoch: " + epoch + ", Elapsed: " + string(D))
+            drawnow
+        end
+    end
+end
