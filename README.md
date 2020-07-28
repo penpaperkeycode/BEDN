@@ -6,3 +6,5 @@ Paper Implementation ("Hubara, Itay, et al. "Binarized neural networks." Advance
 
 Application: CIFAR10 Classification & CamVid Segmentation.
 
+*Don't forget to "add to path" before running the script.
+
