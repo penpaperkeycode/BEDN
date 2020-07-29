@@ -1,6 +1,6 @@
 function xBounded=customBoundAwayFromZero(x)
 
 xBounded = x;
-xBounded(xBounded < eps('double')) = eps('double');
+xBounded(xBounded < eps('single')) = eps('single');
 
 end
