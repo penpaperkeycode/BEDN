@@ -10,5 +10,6 @@ Application: CIFAR10 Classification & CamVid Segmentation.
 
 *Don't forget to "add to path" before running the script.  
 *Do not add both "0.Methods" at the same time.  
-*Custom Training Loop only works on 2020a.   
+*Custom Training Loop only works on 2020a.    
+*Custom Training Loop is not done yet.  
 
