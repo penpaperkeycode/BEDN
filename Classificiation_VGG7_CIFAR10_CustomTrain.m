@@ -8,7 +8,9 @@ helperCIFAR10Data.download(url,datadir);
 [XTrain,YTrain,XValidation,YValidation] = helperCIFAR10Data.load(datadir);
 % load('G:\Work\NeuralNetwork\QuantizedNeuralNetwork\BinarizedNeuralNetwork\DevelopmentHistoryBackup\Phase6_Stabilization\CIFARFACE5\matlab.mat')
 
-catsize=size(unique(YValidation),1);
+numClasses=size(unique(YValidation),1);
+classes = categories(YTrain);
+classes=string(classes);
 
 imageSize = [32 32 3];
 pixelRange = [-3 3];
@@ -22,9 +24,8 @@ imageAugmenter = imageDataAugmenter( ...
     'RandYTranslation',pixelRange);
 
 % imageAugmenter = imageDataAugmenter();
-augimdsTrain = augmentedImageDatastore(imageSize,XTrain,YTrain, ...
+imdsTrain = augmentedImageDatastore(imageSize,XTrain,YTrain, ...
     'DataAugmentation',imageAugmenter);
-
 
 %====================:Define Network Architecture:====================%
 
@@ -63,31 +64,86 @@ layers = [
     SignumActivation('SignAve')
     %======= :Classifier: =======%
     %     dropoutLayer('Name','drop1')
-    Binarizedconvolution2dLayer(1,catsize,'Stride',1,'Name','binAffine1','BiasLearnRateFactor',1,'BiasL2Factor',1) %1/10
+    Binarizedconvolution2dLayer(1,numClasses,'Stride',1,'Name','binAffine1','BiasLearnRateFactor',1,'BiasL2Factor',1) %1/10
     batchNormalizationLayer('Name','BatchNorm16')
     softmaxLayer('Name','softmax')
-    classificationLayer('Name','classoutput')
     ];
 
 lgraph = layerGraph(layers);
 
-%=========================:Train Network:============================%
-miniBatchSize = 1000; %128
+dlnet = dlnetwork(lgraph);
 
-% augimdsTrain.MiniBatchSize=miniBatchSize;
+numEpochs=300;
+miniBatchSize=1000;
+initialLearnRate=1*1e-1; %learnRate=1e-6;
+decay = 0.01;
+momentum = 0.9;
+plots = "training-progress";
+executionEnvironment = "gpu"; %'auto'
 
-learnRate = 0.0001;%0.0005*miniBatchSize/128; %0.005
-valFrequency = 50;
-options1 = trainingOptions('adam', ...  %  sgdm,adam,rmsprop
-    'InitialLearnRate',learnRate,...
-    'MaxEpochs',300, ...
-    'MiniBatchSize',miniBatchSize, ...
-    'Shuffle','every-epoch',...
-    'Plots','training-progress',...
-    'Verbose',true, ...   % For txtal progress checking
-    'VerboseFrequency',valFrequency,...
-    'LearnRateSchedule','piecewise',...
-    'ExecutionEnvironment','multi-gpu');
+if plots == "training-progress"
+    figure
+    lineLossTrain = animatedline('Color',[0.85 0.325 0.098]);
+    ylim([0 inf])
+    xlabel("Iteration")
+    ylabel("Loss")
+    grid on
+end
 
-BaselineNetwork = trainNetwork(augimdsTrain,lgraph,options1);
+velocity = []; %for SGDM
 
+numObservations = numel(YTrain);
+numIterationsPerEpoch = floor(numObservations./miniBatchSize);
+iteration = 0;
+start = tic;
+
+imdsTrain.MiniBatchSize = miniBatchSize;
+% Loop over epochs.
+for epoch = 1:numEpochs
+    % Shuffle data.
+    idx = randperm(numel(YTrain));
+    XTrain = XTrain(:,:,:,idx);
+    YTrain = YTrain(idx);
+    
+    % Loop over mini-batches.
+    for i = 1:numIterationsPerEpoch
+        iteration = iteration + 1;
+        
+        % Read mini-batch of data and convert the labels to dummy
+        % variables.
+        idx = (i-1)*miniBatchSize+1:i*miniBatchSize;
+        X = XTrain(:,:,:,idx);
+        
+        Y = zeros(numClasses, miniBatchSize, 'single');
+        for c = 1:numClasses
+            Y(c,YTrain(idx)==classes(c)) = 1;
+        end
+        
+        % Convert mini-batch of data to dlarray.
+        dlX = dlarray(single(X),'SSCB');
+        
+        % If training on a GPU, then convert data to gpuArray.
+        if (executionEnvironment == "auto" && canUseGPU) || executionEnvironment == "gpu"
+            dlX = gpuArray(dlX);
+        end
+        
+        % Evaluate the model gradients, state, and loss using dlfeval and the
+        % modelGradients function and update the network state.
+        [gradients,state,loss] = dlfeval(@modelGradients,dlnet,dlX,Y);
+        dlnet.State = state;
+        
+        % Determine learning rate for time-based decay learning rate schedule.
+        learnRate = initialLearnRate/(1 + decay*iteration);
+        
+        % Update the network parameters using the SGDM optimizer.
+        [dlnet, velocity] = sgdmupdate(dlnet, gradients, velocity, learnRate, momentum);
+        
+        % Display the training progress.
+        if plots == "training-progress"
+            D = duration(0,0,toc(start),'Format','hh:mm:ss');
+            addpoints(lineLossTrain,iteration,double(gather(extractdata(loss))))
+            title("Epoch: " + epoch + ", Elapsed: " + string(D))
+            drawnow
+        end
+    end
+end

@@ -22,9 +22,8 @@ imageAugmenter = imageDataAugmenter( ...
     'RandYTranslation',pixelRange);
 
 % imageAugmenter = imageDataAugmenter();
-augimdsTrain = augmentedImageDatastore(imageSize,XTrain,YTrain, ...
+imdsTrain = augmentedImageDatastore(imageSize,XTrain,YTrain, ...
     'DataAugmentation',imageAugmenter);
-
 
 %====================:Define Network Architecture:====================%
 
@@ -65,29 +64,86 @@ layers = [
     %     dropoutLayer('Name','drop1')
     Binarizedconvolution2dLayer(1,catsize,'Stride',1,'Name','binAffine1','BiasLearnRateFactor',1,'BiasL2Factor',1) %1/10
     batchNormalizationLayer('Name','BatchNorm16')
-    softmaxLayer('Name','softmax')
-    classificationLayer('Name','classoutput')
     ];
 
 lgraph = layerGraph(layers);
 
-%=========================:Train Network:============================%
-miniBatchSize = 1000; %128
+dlnet = dlnetwork(lgraph);
 
-% augimdsTrain.MiniBatchSize=miniBatchSize;
+numEpochs=300;
+miniBatchSize=1000;
+initialLearnRate=1*1e-3; %learnRate=1e-6;
+decay = 0.01;
+momentum = 0.9;
+plots = "training-progress";
+executionEnvironment = "gpu"; %'auto'
 
-learnRate = 0.0001;%0.0005*miniBatchSize/128; %0.005
-valFrequency = 50;
-options1 = trainingOptions('adam', ...  %  sgdm,adam,rmsprop
-    'InitialLearnRate',learnRate,...
-    'MaxEpochs',300, ...
-    'MiniBatchSize',miniBatchSize, ...
-    'Shuffle','every-epoch',...
-    'Plots','training-progress',...
-    'Verbose',true, ...   % For txtal progress checking
-    'VerboseFrequency',valFrequency,...
-    'LearnRateSchedule','piecewise',...
-    'ExecutionEnvironment','multi-gpu');
+if plots == "training-progress"
+    figure
+    lineLossTrain = animatedline('Color',[0.85 0.325 0.098]);
+    ylim([0 inf])
+    xlabel("Iteration")
+    ylabel("Loss")
+    grid on
+end
 
-BaselineNetwork = trainNetwork(augimdsTrain,lgraph,options1);
+velocity = []; %for SGDM
 
+numObservations = numel(imdsTrain.Files); %numel(YTrain);
+numIterationsPerEpoch = floor(numObservations./miniBatchSize);
+iteration = 0;
+start = tic;
+
+imdsTrain.MiniBatchSize = miniBatchSize;
+
+% Loop over epochs.
+for epoch = 1:numEpochs
+    % Reset and shuffle the datastore.
+    reset(imdsTrain);
+    imdsTrain = shuffle(imdsTrain);
+    
+    % Loop over mini-batches.
+    while hasdata(imdsTrain)
+        iteration = iteration + 1;
+        
+        % Read a mini-batch of data.
+%         pximdsXBatch = read(imdsTrain);
+        [workerXBatch,workerTBatch] = read(imdsTrain);
+        workerXBatch = cat(4,workerXBatch.inputImage{:});
+        workerNumObservations = numel(workerTBatch.Label);
+        % Normalize the images.
+        workerXBatch =  single(workerXBatch) ./ 255;
+        
+            % Convert the labels to dummy variables.
+            workerY = zeros(numClasses,workerNumObservations,'single');
+            for c = 1:numClasses
+                workerY(c,workerTBatch.Label==classes(c)) = 1;
+            end
+        
+        % Convert the mini-batch of data to dlarray.
+        dlworkerX = dlarray(workerXBatch,'SSCB');
+        
+        % If training on GPU, then convert data to gpuArray.
+        if executionEnvironment == "gpu"
+            dlworkerX = gpuArray(dlworkerX);
+        end
+        
+        % Evaluate the model gradients and loss on the worker.
+        [workerGradients,dlworkerLoss,workerState] = dlfeval(@modelGradients_spatialentropy,dlnet,dlworkerX,workerY);
+        dlnet.State = workerState;
+        
+        % Determine learning rate for time-based decay learning rate schedule.
+        learnRate = initialLearnRate/(1 + decay*iteration);
+        
+        % Update the network parameters using the SGDM optimizer.
+        [dlnet.Learnables,velocity] = sgdmupdate(dlnet.Learnables,workerGradients,velocity,learnRate,momentum);
+        
+        % Display the training progress.
+        if plots == "training-progress"
+            D = duration(0,0,toc(start),'Format','hh:mm:ss');
+            addpoints(lineLossTrain,iteration,double(gather(extractdata(dlworkerLoss))))
+            title("Epoch: " + epoch + ", Elapsed: " + string(D))
+            drawnow
+        end
+    end
+end
