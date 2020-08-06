@@ -6,7 +6,6 @@ helperCIFAR10Data.download(url,datadir);
 
 %Load the CIFAR-10 images and use the CIFAR-10 test images for network validation.
 [XTrain,YTrain,XValidation,YValidation] = helperCIFAR10Data.load(datadir);
-% load('G:\Work\NeuralNetwork\QuantizedNeuralNetwork\BinarizedNeuralNetwork\DevelopmentHistoryBackup\Phase6_Stabilization\CIFARFACE5\matlab.mat')
 
 catsize=size(unique(YValidation),1);
 
@@ -21,7 +20,6 @@ imageAugmenter = imageDataAugmenter( ...
     'RandXTranslation',pixelRange, ...
     'RandYTranslation',pixelRange);
 
-% imageAugmenter = imageDataAugmenter();
 augimdsTrain = augmentedImageDatastore(imageSize,XTrain,YTrain, ...
     'DataAugmentation',imageAugmenter);
 
@@ -73,8 +71,6 @@ lgraph = layerGraph(layers);
 
 %=========================:Train Network:============================%
 miniBatchSize = 1000; %128
-
-% augimdsTrain.MiniBatchSize=miniBatchSize;
 
 learnRate = 0.0001;%0.0005*miniBatchSize/128; %0.005
 valFrequency = 50;
