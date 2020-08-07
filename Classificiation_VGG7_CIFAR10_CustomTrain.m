@@ -73,7 +73,7 @@ lgraph = layerGraph(layers);
 
 dlnet = dlnetwork(lgraph);
 
-numEpochs=300;
+numEpochs=1;
 miniBatchSize=1000;
 initialLearnRate=1*1e-1; %learnRate=1e-6;
 decay = 0.01;

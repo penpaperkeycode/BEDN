@@ -16,7 +16,7 @@ while hasdata(pxds)
     [C,info] = read(pxds);
     
     % Convert from categorical to uint8.
-    L = uint8(C);
+    L = uint8(C{:});
     
     % Resize the data. Use 'nearest' interpolation to
     % preserve label IDs.
