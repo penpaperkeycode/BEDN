@@ -29,6 +29,7 @@ for i=1:size(SimNet.Layers,1)
         hexval = binaryVectorToHex(Value);
         dlmwrite(txtName,hexval,'newline','pc','delimiter','')
         
+        Zeroflag=flip(Zeroflag,2);
         Zeroflag=logical(Zeroflag);
         hexval = binaryVectorToHex(Zeroflag);
         dlmwrite(txtName_flag,hexval,'newline','pc','delimiter','')
@@ -48,7 +49,7 @@ for i=1:size(SimNet.Layers,1)
         Value = fliplr(Value);
         hexval = binaryVectorToHex(Value);
         dlmwrite(txtName,hexval,'newline','pc','delimiter','')
-        
+        Zeroflag=flip(Zeroflag,2);
                 Zeroflag=logical(Zeroflag);
         hexval = binaryVectorToHex(Zeroflag);
         dlmwrite(txtName_flag,hexval,'newline','pc','delimiter','')
@@ -64,7 +65,7 @@ for i=1:size(SimNet.Layers,1)
         Value = fliplr(Value);
         hexval = binaryVectorToHex(Value);
         dlmwrite(txtName,hexval,'newline','pc','delimiter','')
-        
+        Zeroflag=flip(Zeroflag,2);
                 Zeroflag=logical(Zeroflag);
         hexval = binaryVectorToHex(Zeroflag);
         dlmwrite(txtName_flag,hexval,'newline','pc','delimiter','')

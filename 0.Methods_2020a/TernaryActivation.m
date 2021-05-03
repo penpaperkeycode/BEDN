@@ -41,9 +41,6 @@ classdef TernaryActivation < nnet.layer.Layer
             tmp1=X>layer.thP;
             tmp2=X<layer.thN;
             Z=single(tmp1+(-1*tmp2));
-
-            
-            
         end
         
         function [dLdX,dLdPositive,dLdNegative] = backward(layer, X, ~, dLdZ, ~)

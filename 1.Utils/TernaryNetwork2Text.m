@@ -115,8 +115,8 @@ for i=1:size(SimNet.Layers,1)
         TransposedWeight=flip(TransposedWeight);
         TransposedWeight=flip(TransposedWeight,2);
         weight1d = int32(reshape(permute(TransposedWeight,[2 1 3 4]),1,[]))';
-        weight1d(weight1d==-1)=0;
-        weight1d=logical(weight1d);
+%         weight1d(weight1d==-1)=0;
+%         weight1d=logical(weight1d);
         dlmwrite(txtName,weight1d,'newline','pc')
         
         txtName=[Address,'\b',num2str(convBindex),'_BNFb.txt'];
