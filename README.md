@@ -11,7 +11,7 @@ If you want a reproduce BEDN that I uploaded, follow below:
 2. layers=AutoConstructHWLayer(OriginNet);
 3. lgraph=layerGraph(layers);
 4. SimNet=DAGNetwork.loadobj(lgraph);
-5. featureMap = activations(SimNet, I, SimNet.Layers(5, 1).Name,'ExecutionEnvironment','gpu' ); %5 is 'binConv2', you know :)
+5. featureMap = activations(SimNet, I, SimNet.Layers(5, 1).Name,'ExecutionEnvironment','gpu' ); %5 is 'binConv2', I is any images with 360x480x3 size
 
 SimNet is final BEDN, OriginNet is a pure model state without final binarization after training. (OriginNet for reuse to any other applications)
 
