@@ -1,4 +1,4 @@
-# Binarized Neural Networks on MATLAB
+# Binarized Neural Networks on MATLAB and Pytorch
 
 "Binarized Encoder-Decoder Network and Binarized Deconvolution Engine for Semantic Segmentation"
 (Kim, H., Kim, J., Choi, J., Lee, J., & Song, Y. H. (2020). Binarized Encoder-Decoder Network and Binarized Deconvolution Engine for Semantic Segmentation. IEEE Access.)
