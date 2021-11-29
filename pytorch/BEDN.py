@@ -5,6 +5,7 @@
 
 #%%
 import torch
+# from torch._C import float32
 import torch.nn as nn
 import torch.nn.parameter as Parameter
 import torch.nn.functional as F
@@ -163,7 +164,7 @@ class CamvidDataset(D.Dataset):
         self.transform = transform
 
         self.inputs_dtype = torch.float32
-        self.labels_dtype = torch.long
+        self.labels_dtype = torch.float32
 
 
     def __len__(self):
@@ -178,7 +179,14 @@ class CamvidDataset(D.Dataset):
         if self.transform is not None:
             x, y = self.transform(x, y)
         
-        y = y[np.newaxis, :]
+        # y = y[np.newaxis, :]
+        y_tmp = np.zeros([11, 360, 480])
+        for i in range(11):
+            if i == 0:
+                continue
+            y_tmp[i-1,:,:] = y == i
+        
+        y = y_tmp
         
 
         x, y = torch.from_numpy(x).type(self.inputs_dtype), torch.from_numpy(y).type(self.labels_dtype)
@@ -385,10 +393,14 @@ trainer = Trainer(model=model,
                   training_DataLoader=dataloader_training,
                   validation_DataLoader=dataloader_val,
                   lr_scheduler=None,
-                  epochs=1,
+                  epochs=100,
                   epoch=0,
                   notebook=None)
 # %%
 training_losses, validation_losses, lr_rates = trainer.run_trainer()
+
+# %%
+print(validation_losses)
+# %%
 
 # %%
