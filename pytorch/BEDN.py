@@ -2,6 +2,7 @@
 # https://towardsdatascience.com/creating-and-training-a-u-net-model-with-pytorch-for-2d-3d-semantic-segmentation-training-3-4-8242d31de234
 # https://wikidocs.net/57165
 # https://tutorials.pytorch.kr/beginner/data_loading_tutorial.html
+# https://www.kaggle.com/ligtfeather/semantic-segmentation-is-easy-with-pytorch
 
 #%%
 import torch
