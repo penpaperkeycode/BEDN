@@ -5,25 +5,18 @@
 
 #%%
 import torch
-# from torch._C import float32
 import torch.nn as nn
 import torch.nn.parameter as Parameter
 import torch.nn.functional as F
 from torch.autograd import Function, Variable
 import torch.optim as optim
 import torch.utils.data as D
-
 from torchvision import datasets,transforms
-
-import math
-import time
-import random
 import matplotlib.pyplot as plt
 import pathlib
 from skimage.io import imread
 from torchsummary import summary
 import numpy as np
-#import argparse
 
 #%%
 class SignActivation(Function):
@@ -93,7 +86,7 @@ class BinConvTranspose2d(nn.ConvTranspose2d):
             out += self.bias.view(1, -1, 1, 1).expand_as(out)
         return out
 
-
+bnorm_momentum= 0.5
 # %%
 class Model(nn.Module):
 
@@ -216,7 +209,7 @@ dataset_train = CamvidDataset(inputs=inputs,
                               labels=labels)
 # dataloader training
 dataloader_training = torch.utils.data.DataLoader(dataset=dataset_train,
-                                 batch_size=4,
+                                 batch_size=6,
                                  shuffle=True)
 
 #%%
@@ -228,8 +221,21 @@ dataset_val = CamvidDataset(inputs=inputs,
                               labels=labels)
 # dataloader training
 dataloader_val = torch.utils.data.DataLoader(dataset=dataset_val,
-                                 batch_size=4,
+                                 batch_size=6,
                                  shuffle=True,
+                                 )
+
+# %%
+inputs = get_filenames_of_path(root / 'data/CamVid/test')
+labels = get_filenames_of_path(root / 'data/CamVid/testannot')
+
+# dataset training
+dataset_test = CamvidDataset(inputs=inputs,
+                              labels=labels)
+# dataloader training
+dataloader_test = torch.utils.data.DataLoader(dataset=dataset_test,
+                                 batch_size=6,
+                                 shuffle=False,
                                  )
 
 #%% test
@@ -239,18 +245,6 @@ x, y = batch
 print(f'x = shape: {x.shape}; type: {x.dtype}')
 print(f'y = shape: {y.shape}; class: {y.unique()}; type: {y.dtype}')
 
-
-#%%
-batch_size=2
-test_batch_size=2
-momentum = 0.9
-decay = 0 #weight decay
-damp= 0 #momentum dampening
-lr = 0.01
-epochs = 250
-log_interval = test_batch_size
-bnorm_momentum= 0.5 #0.4
-update_list= [150,200,250]
 #%%
 model=Model()
 model.cuda()
@@ -265,6 +259,7 @@ class Trainer:
                  optimizer: torch.optim.Optimizer,
                  training_DataLoader: torch.utils.data.Dataset,
                  validation_DataLoader: torch.utils.data.Dataset = None,
+                 test_DataLoader: torch.utils.data.Dataset = None,
                  lr_scheduler: torch.optim.lr_scheduler = None,
                  epochs: int = 100,
                  epoch: int = 0,
@@ -277,6 +272,7 @@ class Trainer:
         self.lr_scheduler = lr_scheduler
         self.training_DataLoader = training_DataLoader
         self.validation_DataLoader = validation_DataLoader
+        self.test_DataLoader = test_DataLoader
         self.device = device
         self.epochs = epochs
         self.epoch = epoch
@@ -285,6 +281,7 @@ class Trainer:
         self.training_loss = []
         self.validation_loss = []
         self.learning_rate = []
+        self.mIoU = []
 
     def run_trainer(self):
 
@@ -311,7 +308,7 @@ class Trainer:
                     self.lr_scheduler.batch(self.validation_loss[i])  # learning rate scheduler step with validation loss
                 else:
                     self.lr_scheduler.batch()  # learning rate scheduler step
-        return self.training_loss, self.validation_loss, self.learning_rate
+        return self.training_loss, self.validation_loss, self.learning_rate, self.mIoU
 
     def _train(self):
 
@@ -339,7 +336,7 @@ class Trainer:
 
         self.training_loss.append(np.mean(train_losses))
         self.learning_rate.append(self.optimizer.param_groups[0]['lr'])
-
+    
         batch_iter.close()
 
     def _validate(self):
@@ -351,25 +348,97 @@ class Trainer:
 
         self.model.eval()  # evaluation mode
         valid_losses = []  # accumulate the losses here
+        valid_mIoUs = [] # accumulate the mIoU here
         batch_iter = tqdm(enumerate(self.validation_DataLoader), 'Validation', total=len(self.validation_DataLoader),
                           leave=False)
 
         for i, (x, y) in batch_iter:
             input, target = x.to(self.device), y.to(self.device)  # send to device (GPU or CPU)
-            # remove channel dim
-            target = target.squeeze(1)
-            #
             with torch.no_grad():
                 out = self.model(input)
                 loss = self.criterion(out, target)
                 loss_value = loss.item()
                 valid_losses.append(loss_value)
-
+                valid_mIoUs.append(self._mIoU(out, target))
+                
                 batch_iter.set_description(f'Validation: (loss {loss_value:.4f})')
+        mean_loss = np.mean(valid_losses)
+        self.validation_loss.append(mean_loss)
+        mean_mIoU = np.mean(valid_mIoUs)
+        self.mIoU.append(mean_mIoU)
 
-        self.validation_loss.append(np.mean(valid_losses))
+        # print('Validaton Mean Loss:{}'.format(mean_loss))
+        # print('Validation Mean mIoU:{}'.format(mean_mIoU))
 
         batch_iter.close()
+
+    def test(self):
+        if self.notebook:
+            from tqdm.notebook import tqdm, trange
+        else:
+            from tqdm import tqdm, trange
+
+        self.model.eval()  # evaluation mode
+        test_losses = []  # accumulate the losses here
+        test_mIoUs = [] # accumulate the mIoU here
+        batch_iter = tqdm(enumerate(self.test_DataLoader), 'Validation', total=len(self.test_DataLoader),
+                          leave=False)
+
+        for i, (x, y) in batch_iter:
+            input, target = x.to(self.device), y.to(self.device)  # send to device (GPU or CPU)
+            with torch.no_grad():
+                out = self.model(input)
+                loss = self.criterion(out, target)
+                loss_value = loss.item()
+                test_losses.append(loss_value)
+                test_mIoUs.append(self._mIoU(out, target))
+                
+                batch_iter.set_description(f'Validation: (loss {loss_value:.4f})')
+
+        mean_loss = np.mean(test_losses)
+        mean_mIoU = np.mean(test_mIoUs)
+        print('Test Mean mIoU:{}'.format(mean_mIoU))
+        print('Testset Mean Loss:{}'.format(mean_loss))
+
+        batch_iter.close()
+        return mean_mIoU, mean_loss
+
+    def _mIoU(self, pred_mask, mask, smooth=1e-10, n_classes=11):
+        with torch.no_grad():
+            pred_mask = F.softmax(pred_mask, dim=1)
+            pred_mask = torch.argmax(pred_mask, dim=1)
+            pred_mask = pred_mask.contiguous().view(-1)
+
+            mask = torch.argmax(mask, dim=1)
+            mask = mask.contiguous().view(-1)
+
+            iou_per_class = []
+            for clas in range(0, n_classes): #loop per pixel class
+                true_class = pred_mask == clas
+                true_label = mask == clas
+
+                if true_label.long().sum().item() == 0: #no exist label in this loop
+                    iou_per_class.append(np.nan)
+                else:
+                    intersect = torch.logical_and(true_class, true_label).sum().float().item()
+                    union = torch.logical_or(true_class, true_label).sum().float().item()
+
+                    iou = (intersect + smooth) / (union +smooth)
+                    iou_per_class.append(iou)
+            return np.nanmean(iou_per_class)
+# %%
+def pixel_accuracy(output, mask):
+    with torch.no_grad():
+        output = torch.argmax(F.softmax(output, dim=1), dim=1)
+        correct = torch.eq(output, mask).int()
+        accuracy = float(correct.sum()) / float(correct.numel())
+    return accuracy
+
+#%%
+def get_lr(optimizer):
+    for param_group in optimizer.param_groups:
+        return param_group['lr']
+
 
 #%%
 # device
@@ -382,7 +451,8 @@ else:
 # criterion
 criterion = torch.nn.CrossEntropyLoss()
 # optimizer
-optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+# optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
+optimizer = torch.optim.SGD(model.parameters(), lr=0.001)
 
 #%%
 # trainer
@@ -392,15 +462,14 @@ trainer = Trainer(model=model,
                   optimizer=optimizer,
                   training_DataLoader=dataloader_training,
                   validation_DataLoader=dataloader_val,
+                  test_DataLoader=dataloader_test,
                   lr_scheduler=None,
-                  epochs=100,
+                  epochs=400,
                   epoch=0,
                   notebook=None)
 # %%
-training_losses, validation_losses, lr_rates = trainer.run_trainer()
-
+training_losses, validation_losses, lr_rates, mIoU = trainer.run_trainer()
+print('Final Validaton Mean Loss:{}'.format(validation_losses[-1]))
+print('Fianl Validation Mean mIoU:{}'.format(mIoU[-1]))
 # %%
-print(validation_losses)
-# %%
-
-# %%
+mean_mIoU, mean_loss = trainer.test()
