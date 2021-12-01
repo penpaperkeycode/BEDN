@@ -4,22 +4,23 @@
 # https://tutorials.pytorch.kr/beginner/data_loading_tutorial.html
 # https://www.kaggle.com/ligtfeather/semantic-segmentation-is-easy-with-pytorch
 
-#%%
-import torch
-import torch.nn as nn
-import torch.nn.parameter as Parameter
-import torch.nn.functional as F
-from torch.autograd import Function, Variable
-import torch.optim as optim
-import torch.utils.data as D
-from torchvision import datasets,transforms
+#%% import APIs
+import numpy as np
 import matplotlib.pyplot as plt
 import pathlib
-from skimage.io import imread
-from torchsummary import summary
-import numpy as np
 
-#%%
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+import torch.utils.data as D
+
+from torch.autograd import Function
+from torchsummary import summary
+from skimage.io import imread
+# from torchvision import datasets,transforms
+
+#%% define Sign-Activation for 1-bit quantized activation
 class SignActivation(Function):
     @staticmethod
     def forward(self, input):
@@ -35,7 +36,7 @@ class SignActivation(Function):
 # aliases
 binarize = SignActivation.apply
 
-# %%
+# %% define binarized neural networks layers
 class BinaryTanh(nn.Module):
     def __init__(self):
         super(BinaryTanh, self).__init__()
@@ -88,7 +89,7 @@ class BinConvTranspose2d(nn.ConvTranspose2d):
         return out
 
 bnorm_momentum= 0.5
-# %%
+# %% define Binarized encoder decoder network (BEDN)
 class Model(nn.Module):
 
     def __init__(self):
@@ -146,7 +147,7 @@ class Model(nn.Module):
         x = self.decoders(x)
         return x
 
-#%%
+#%% define dataset
 class CamvidDataset(D.Dataset):
     def __init__(self, 
                 inputs: list, 
@@ -188,15 +189,14 @@ class CamvidDataset(D.Dataset):
         x = torch.permute(x, [2,0,1])
 
         return x, y
-#%%
-# root directory
+#%% define path maaker
 root = pathlib.Path.cwd() 
 def get_filenames_of_path(path: pathlib.Path, ext: str = '*'):
     """Returns a list of files in a directory/path. Uses pathlib."""
     filenames = [file for file in path.glob(ext) if file.is_file()]
     return filenames
 
-#%%
+#%% get train-set
 inputs = get_filenames_of_path(root / 'data/CamVid/train')
 labels = get_filenames_of_path(root / 'data/CamVid/trainannot')
 
@@ -205,53 +205,53 @@ labels = get_filenames_of_path(root / 'data/CamVid/trainannot')
 # g = torch.Generator()
 # g.manual_seed(random_seed)
 
-# dataset training
+# dataset for training
 dataset_train = CamvidDataset(inputs=inputs,
                               labels=labels)
-# dataloader training
+# dataloader for training
 dataloader_training = torch.utils.data.DataLoader(dataset=dataset_train,
                                  batch_size=6,
                                  shuffle=True)
 
-#%%
+#%% get validation-set
 inputs = get_filenames_of_path(root / 'data/CamVid/val')
 labels = get_filenames_of_path(root / 'data/CamVid/valannot')
 
-# dataset training
+# dataset for validation
 dataset_val = CamvidDataset(inputs=inputs,
                               labels=labels)
-# dataloader training
+# dataloader for validation
 dataloader_val = torch.utils.data.DataLoader(dataset=dataset_val,
                                  batch_size=6,
                                  shuffle=True,
                                  )
 
-# %%
+# %% get test-set
 inputs = get_filenames_of_path(root / 'data/CamVid/test')
 labels = get_filenames_of_path(root / 'data/CamVid/testannot')
 
-# dataset training
+# dataset for test
 dataset_test = CamvidDataset(inputs=inputs,
                               labels=labels)
-# dataloader training
+# dataloader for test
 dataloader_test = torch.utils.data.DataLoader(dataset=dataset_test,
                                  batch_size=6,
                                  shuffle=False,
                                  )
 
-#%% test
+#%% check dataset
 batch = dataset_train[0]
 x, y = batch
 
 print(f'x = shape: {x.shape}; type: {x.dtype}')
 print(f'y = shape: {y.shape}; class: {y.unique()}; type: {y.dtype}')
 
-#%%
+#%% create model
 model=Model()
 model.cuda()
 summary = summary(model, (3, 360, 480))
 
-#%%
+#%% define Trainer class
 class Trainer:
     def __init__(self,
                  model: torch.nn.Module,
@@ -382,9 +382,6 @@ class Trainer:
         mean_pixel_accuracy = np.mean(valid_pixelAccuracy)
         self.pixel_accuracy.append(mean_pixel_accuracy)
 
-        # print('Validaton Mean Loss:{}'.format(mean_loss))
-        # print('Validation Mean mIoU:{}'.format(mean_mIoU))
-
         batch_iter.close()
 
     def test(self):
@@ -450,15 +447,12 @@ class Trainer:
             accuracy = float(correct.sum()) / float(correct.numel())
         return accuracy
 
-# %%
-
-#%%
+#%% util
 def get_lr(optimizer):
     for param_group in optimizer.param_groups:
         return param_group['lr']
 
-
-#%%
+#%% device check
 # device
 if torch.cuda.is_available():
     print("CUDA Available!")
@@ -467,14 +461,14 @@ else:
     print("Only CPU!")
     torch.device('cpu')
 
-#%%
+#%% get criterion & optimizer
 # criterion
 criterion = torch.nn.CrossEntropyLoss()
 # optimizer
-# optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
-optimizer = torch.optim.SGD(model.parameters(), lr=0.001)
+# optimizer = optim.AdamW(model.parameters(), lr=0.001)
+optimizer = optim.SGD(model.parameters(), lr=0.001)
 
-#%%
+#%% get Trainer & set configurations
 # trainer
 trainer = Trainer(model=model,
                   device=device,
@@ -484,28 +478,26 @@ trainer = Trainer(model=model,
                   validation_DataLoader=dataloader_val,
                   test_DataLoader=dataloader_test,
                   lr_scheduler=None,
-                  epochs=10,
+                  epochs=400,
                   epoch=0,
                   notebook=None)
-# %%
+# %% model.train
 training_losses, validation_losses, lr_rates, mIoU = trainer.run_trainer()
 print('Final Validaton Mean Loss:{}'.format(validation_losses[-1]))
 print('Fianl Validation Mean mIoU:{}'.format(mIoU[-1]))
-# %%
+print(validation_losses)
+
+# %% chekc test-set accuracy
 mean_mIoU, mean_loss = trainer.test()
 
-#%%
-#fianl binarize
-for p in list(trainer.model.parameters()):
-    p.data[p.data >= 0] = 1
-    p.data[p.data < 0] = -1
-    
-print(trainer.model)
-
-#%%
-for name, param in trainer.model.named_parameters():
-    if param.requires_grad:
-        print(name)
-        print(param)
-        break
+#%% fianl binarize
+# for p in list(trainer.model.parameters()):
+#     p.data[p.data >= 0] = 1
+#     p.data[p.data < 0] = -1
+# print(trainer.model)
+# for name, param in trainer.model.named_parameters():
+#     if param.requires_grad:
+#         print(name)
+#         print(param)
+#         break
 # %%
