@@ -22,14 +22,14 @@ import numpy as np
 #%%
 class SignActivation(Function):
     @staticmethod
-    def forward(cxt, input):
+    def forward(self, input):
         output = input.new(input.size())
         output[input >= 0] = 1
         output[input < 0] = -1
         return output
 
     @staticmethod
-    def backward(cxt, grad_output):
+    def backward(self, grad_output):
         grad_input = grad_output.clone()
         return grad_input
 # aliases
@@ -283,6 +283,7 @@ class Trainer:
         self.validation_loss = []
         self.learning_rate = []
         self.mIoU = []
+        self.pixel_accuracy = []
 
     def run_trainer(self):
 
@@ -331,7 +332,16 @@ class Trainer:
             loss_value = loss.item()
             train_losses.append(loss_value)
             loss.backward()  # one backward pass
+
+            for p in list(self.model.parameters()):
+                if hasattr(p,'org'):
+                    p.data.copy_(p.org) 
+
             self.optimizer.step()  # update the parameters
+
+            for p in list(self.model.parameters()):
+                if hasattr(p,'org'):
+                    p.org.copy_(p.data.clamp_(-1,1))
 
             batch_iter.set_description(f'Training: (loss {loss_value:.4f})')  # update progressbar
 
@@ -350,6 +360,7 @@ class Trainer:
         self.model.eval()  # evaluation mode
         valid_losses = []  # accumulate the losses here
         valid_mIoUs = [] # accumulate the mIoU here
+        valid_pixelAccuracy = [] # accumulate the pixel-accuracy here
         batch_iter = tqdm(enumerate(self.validation_DataLoader), 'Validation', total=len(self.validation_DataLoader),
                           leave=False)
 
@@ -361,12 +372,15 @@ class Trainer:
                 loss_value = loss.item()
                 valid_losses.append(loss_value)
                 valid_mIoUs.append(self._mIoU(out, target))
+                valid_pixelAccuracy.append(self._pixel_accuracy(out, target))
                 
                 batch_iter.set_description(f'Validation: (loss {loss_value:.4f})')
         mean_loss = np.mean(valid_losses)
         self.validation_loss.append(mean_loss)
         mean_mIoU = np.mean(valid_mIoUs)
         self.mIoU.append(mean_mIoU)
+        mean_pixel_accuracy = np.mean(valid_pixelAccuracy)
+        self.pixel_accuracy.append(mean_pixel_accuracy)
 
         # print('Validaton Mean Loss:{}'.format(mean_loss))
         # print('Validation Mean mIoU:{}'.format(mean_mIoU))
@@ -382,7 +396,7 @@ class Trainer:
         self.model.eval()  # evaluation mode
         test_losses = []  # accumulate the losses here
         test_mIoUs = [] # accumulate the mIoU here
-        batch_iter = tqdm(enumerate(self.test_DataLoader), 'Validation', total=len(self.test_DataLoader),
+        batch_iter = tqdm(enumerate(self.test_DataLoader), 'Test', total=len(self.test_DataLoader),
                           leave=False)
 
         for i, (x, y) in batch_iter:
@@ -394,7 +408,7 @@ class Trainer:
                 test_losses.append(loss_value)
                 test_mIoUs.append(self._mIoU(out, target))
                 
-                batch_iter.set_description(f'Validation: (loss {loss_value:.4f})')
+                batch_iter.set_description(f'Test: (loss {loss_value:.4f})')
 
         mean_loss = np.mean(test_losses)
         mean_mIoU = np.mean(test_mIoUs)
@@ -427,13 +441,16 @@ class Trainer:
                     iou = (intersect + smooth) / (union +smooth)
                     iou_per_class.append(iou)
             return np.nanmean(iou_per_class)
+
+    def _pixel_accuracy(self, output, mask):
+        with torch.no_grad():
+            mask = torch.argmax(mask, dim=1)
+            output = torch.argmax(F.softmax(output, dim=1), dim=1)
+            correct = torch.eq(output, mask).int()
+            accuracy = float(correct.sum()) / float(correct.numel())
+        return accuracy
+
 # %%
-def pixel_accuracy(output, mask):
-    with torch.no_grad():
-        output = torch.argmax(F.softmax(output, dim=1), dim=1)
-        correct = torch.eq(output, mask).int()
-        accuracy = float(correct.sum()) / float(correct.numel())
-    return accuracy
 
 #%%
 def get_lr(optimizer):
@@ -444,8 +461,10 @@ def get_lr(optimizer):
 #%%
 # device
 if torch.cuda.is_available():
+    print("CUDA Available!")
     device = torch.device('cuda')
 else:
+    print("Only CPU!")
     torch.device('cpu')
 
 #%%
@@ -465,7 +484,7 @@ trainer = Trainer(model=model,
                   validation_DataLoader=dataloader_val,
                   test_DataLoader=dataloader_test,
                   lr_scheduler=None,
-                  epochs=400,
+                  epochs=10,
                   epoch=0,
                   notebook=None)
 # %%
@@ -474,3 +493,19 @@ print('Final Validaton Mean Loss:{}'.format(validation_losses[-1]))
 print('Fianl Validation Mean mIoU:{}'.format(mIoU[-1]))
 # %%
 mean_mIoU, mean_loss = trainer.test()
+
+#%%
+#fianl binarize
+for p in list(trainer.model.parameters()):
+    p.data[p.data >= 0] = 1
+    p.data[p.data < 0] = -1
+    
+print(trainer.model)
+
+#%%
+for name, param in trainer.model.named_parameters():
+    if param.requires_grad:
+        print(name)
+        print(param)
+        break
+# %%
