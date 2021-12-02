@@ -1,9 +1,3 @@
-# https://towardsdatascience.com/creating-and-training-a-u-net-model-with-pytorch-for-2d-3d-semantic-segmentation-dataset-fb1f7f80fe55
-# https://towardsdatascience.com/creating-and-training-a-u-net-model-with-pytorch-for-2d-3d-semantic-segmentation-training-3-4-8242d31de234
-# https://wikidocs.net/57165
-# https://tutorials.pytorch.kr/beginner/data_loading_tutorial.html
-# https://www.kaggle.com/ligtfeather/semantic-segmentation-is-easy-with-pytorch
-
 #%% import APIs
 import numpy as np
 import matplotlib.pyplot as plt
@@ -310,7 +304,7 @@ class Trainer:
                     self.lr_scheduler.batch(self.validation_loss[i])  # learning rate scheduler step with validation loss
                 else:
                     self.lr_scheduler.batch()  # learning rate scheduler step
-        return self.training_loss, self.validation_loss, self.learning_rate, self.mIoU
+        return self.training_loss, self.validation_loss, self.learning_rate, self.mIoU, self.pixel_accuracy
 
     def _train(self):
 
@@ -482,10 +476,10 @@ trainer = Trainer(model=model,
                   epoch=0,
                   notebook=None)
 # %% model.train
-training_losses, validation_losses, lr_rates, mIoU = trainer.run_trainer()
+training_losses, validation_losses, lr_rates, mIoU, pixel_accuracy = trainer.run_trainer()
 print('Final Validaton Mean Loss:{}'.format(validation_losses[-1]))
 print('Fianl Validation Mean mIoU:{}'.format(mIoU[-1]))
-print(validation_losses)
+print(pixel_accuracy)
 
 # %% chekc test-set accuracy
 mean_mIoU, mean_loss = trainer.test()
