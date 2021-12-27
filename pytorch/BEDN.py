@@ -1,14 +1,30 @@
+# https://towardsdatascience.com/creating-and-training-a-u-net-model-with-pytorch-for-2d-3d-semantic-segmentation-dataset-fb1f7f80fe55
+# https://towardsdatascience.com/creating-and-training-a-u-net-model-with-pytorch-for-2d-3d-semantic-segmentation-training-3-4-8242d31de234
+# https://wikidocs.net/57165
+# https://tutorials.pytorch.kr/beginner/data_loading_tutorial.html
+# https://www.kaggle.com/ligtfeather/semantic-segmentation-is-easy-with-pytorch
+# https://github.com/CSAILVision/semantic-segmentation-pytorch/blob/master/mit_semseg/utils.py
+# https://pytorch.org/vision/master/auto_examples/plot_visualization_utils.html
+# https://wandb.ai/stacey/deep-drive/reports/Image-Masks-for-Semantic-Segmentation--Vmlldzo4MTUwMw
+# https://pytorch.org/docs/stable/generated/torch.optim.lr_scheduler.ReduceLROnPlateau.html#torch.optim.lr_scheduler.ReduceLROnPlateau
+# https://pytorch.org/docs/stable/optim.html
+
 #%% import APIs
 import numpy as np
 import matplotlib.pyplot as plt
 import pathlib
-
+import os
 import torch
+import wandb
+
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torch.utils.data as D
+import torchvision.transforms.functional as Fv
 
+from torchvision.utils import save_image
+from torchvision.utils import draw_segmentation_masks as maskShow
 from torch.autograd import Function
 from torchsummary import summary
 from skimage.io import imread
@@ -177,7 +193,6 @@ class CamvidDataset(D.Dataset):
         
         y = y_tmp
         
-
         x, y = torch.from_numpy(x).type(self.inputs_dtype), torch.from_numpy(y).type(self.labels_dtype)
 
         x = torch.permute(x, [2,0,1])
@@ -189,6 +204,10 @@ def get_filenames_of_path(path: pathlib.Path, ext: str = '*'):
     """Returns a list of files in a directory/path. Uses pathlib."""
     filenames = [file for file in path.glob(ext) if file.is_file()]
     return filenames
+
+#%% get label map
+with open(os.path.join('./data/Camvid/', "codes.txt"), "r") as f:
+    label_mapping = {l.strip(): i for i, l in enumerate(f)}
 
 #%% get train-set
 inputs = get_filenames_of_path(root / 'data/CamVid/train')
@@ -203,7 +222,7 @@ labels = get_filenames_of_path(root / 'data/CamVid/trainannot')
 dataset_train = CamvidDataset(inputs=inputs,
                               labels=labels)
 # dataloader for training
-dataloader_training = torch.utils.data.DataLoader(dataset=dataset_train,
+dataloader_training = D.DataLoader(dataset=dataset_train,
                                  batch_size=6,
                                  shuffle=True)
 
@@ -215,7 +234,7 @@ labels = get_filenames_of_path(root / 'data/CamVid/valannot')
 dataset_val = CamvidDataset(inputs=inputs,
                               labels=labels)
 # dataloader for validation
-dataloader_val = torch.utils.data.DataLoader(dataset=dataset_val,
+dataloader_val = D.DataLoader(dataset=dataset_val,
                                  batch_size=6,
                                  shuffle=True,
                                  )
@@ -228,7 +247,7 @@ labels = get_filenames_of_path(root / 'data/CamVid/testannot')
 dataset_test = CamvidDataset(inputs=inputs,
                               labels=labels)
 # dataloader for test
-dataloader_test = torch.utils.data.DataLoader(dataset=dataset_test,
+dataloader_test = D.DataLoader(dataset=dataset_test,
                                  batch_size=6,
                                  shuffle=False,
                                  )
@@ -242,7 +261,6 @@ print(f'y = shape: {y.shape}; class: {y.unique()}; type: {y.dtype}')
 
 #%% create model
 model=Model()
-model.cuda()
 summary = summary(model, (3, 360, 480))
 
 #%% define Trainer class
@@ -279,6 +297,8 @@ class Trainer:
         self.mIoU = []
         self.pixel_accuracy = []
 
+        self.testSave = 0
+
     def run_trainer(self):
 
         if self.notebook:
@@ -303,7 +323,8 @@ class Trainer:
                 if self.validation_DataLoader is not None and self.lr_scheduler.__class__.__name__ == 'ReduceLROnPlateau':
                     self.lr_scheduler.batch(self.validation_loss[i])  # learning rate scheduler step with validation loss
                 else:
-                    self.lr_scheduler.batch()  # learning rate scheduler step
+                    # self.lr_scheduler.batch()  # learning rate scheduler step
+                    self.lr_scheduler.step()  # learning rate scheduler step
         return self.training_loss, self.validation_loss, self.learning_rate, self.mIoU, self.pixel_accuracy
 
     def _train(self):
@@ -394,6 +415,9 @@ class Trainer:
             input, target = x.to(self.device), y.to(self.device)  # send to device (GPU or CPU)
             with torch.no_grad():
                 out = self.model(input)
+
+                self.testSave = maskShowAll(input, out, testMode=True, testSave = self.testSave)
+
                 loss = self.criterion(out, target)
                 loss_value = loss.item()
                 test_losses.append(loss_value)
@@ -453,15 +477,17 @@ if torch.cuda.is_available():
     device = torch.device('cuda')
 else:
     print("Only CPU!")
-    torch.device('cpu')
+    device = torch.device('cpu')
+
+model.to(device)
 
 #%% get criterion & optimizer
 # criterion
 criterion = torch.nn.CrossEntropyLoss()
 # optimizer
 # optimizer = optim.AdamW(model.parameters(), lr=0.001)
-optimizer = optim.SGD(model.parameters(), lr=0.001)
-
+optimizer = optim.SGD(model.parameters(), lr=1e-3)
+scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=4000, gamma=0.1)
 #%% get Trainer & set configurations
 # trainer
 trainer = Trainer(model=model,
@@ -471,8 +497,8 @@ trainer = Trainer(model=model,
                   training_DataLoader=dataloader_training,
                   validation_DataLoader=dataloader_val,
                   test_DataLoader=dataloader_test,
-                  lr_scheduler=None,
-                  epochs=400,
+                  lr_scheduler=scheduler,
+                  epochs=5000,
                   epoch=0,
                   notebook=None)
 # %% model.train
@@ -481,8 +507,82 @@ print('Final Validaton Mean Loss:{}'.format(validation_losses[-1]))
 print('Fianl Validation Mean mIoU:{}'.format(mIoU[-1]))
 print(pixel_accuracy)
 
+#%%
+def imgShow(imgs):
+    if not isinstance(imgs, list):
+        imgs = [imgs]
+    fix, axs = plt.subplots(ncols=len(imgs), squeeze=False)
+    for i, img in enumerate(imgs):
+        img = img.detach()
+        img = Fv.to_pil_image(img)
+        axs[0, i].imshow(np.asarray(img), cmap='gray')
+        axs[0, i].set(xticklabels=[], yticklabels=[], xticks=[], yticks=[])
+
+def maskShowAll(batch_img, pred, num_classes = 11, class_dim = 1, testMode = False, testSave = 0):
+    pred = F.softmax(pred, dim=1)
+    all_classes_masks = pred.argmax(class_dim) == torch.arange(num_classes)[:, None, None, None].cuda()
+    all_classes_masks = all_classes_masks.swapaxes(0, 1)
+    if not testMode:
+        print(f"shape = {all_classes_masks.shape}, dtype = {all_classes_masks.dtype}")
+
+        dogs_with_masks = [
+            maskShow(img, masks=mask, alpha=.7)
+            for img, mask in zip(batch_img.type(torch.uint8).unsqueeze(0), all_classes_masks)
+        ]
+    else:
+        dogs_with_masks = [
+            maskShow(img, masks=mask, alpha=.7)
+            for img, mask in zip(batch_img.type(torch.uint8), all_classes_masks)
+        ]
+    if testMode:
+        save_image(dogs_with_masks, os.path.join('./predResult/pred_{}.png'.format(testSave)))
+        testSave += 1
+    else:
+        print('mask shape: {}'.format(dogs_with_masks[0].shape))
+        imgShow(dogs_with_masks)
+
+    return testSave
+
+
 # %% chekc test-set accuracy
 mean_mIoU, mean_loss = trainer.test()
+
+#%%
+imgShow(x)
+
+#%%
+# def maskShow(label, label_mapping):
+#     label = F.softmax(label, dim=1)
+#     label = torch.argmax(label, dim=1)
+#     label = label.contiguous().view(-1)
+#     label_show = [
+#         label[img_idx, label_mapping[cls]]
+#         for img_idx in range(batch.shape[0])
+#         for cls in ('dog', 'boat')
+#     ]
+#     imgShow(label_show)
+
+# plt.imshow(y.permute(1,2,0), cmap='jet', alpha=0.5)
+# %%
+pred = trainer.model(torch.tensor(x.unsqueeze(0)).cuda())
+maskShowAll(x, pred)
+
+#%%
+# dog_and_boat_masks = [
+#     pred[img_idx, label_mapping[cls]]
+#     for img_idx in range(pred.shape[0])
+#     for cls in label_mapping
+# ]
+
+# %%
+# maskShow(x.detach().type(torch.uint8), masks = pred.detach().squeeze(0), alpha=0.7)
+# %%
+# imgShow(torch.argmax(pred,dim=1).detach().squeeze(0).type(torch.uint8))
+# %%
+# torch.save(trainer.model.state_dict(), os.path.join('./BEDN.pth'))
+# %%
+model.load_state_dict(torch.load(os.path.join('./BEDN.pth')))
+model.to(device)
 
 #%% fianl binarize
 # for p in list(trainer.model.parameters()):
@@ -494,4 +594,3 @@ mean_mIoU, mean_loss = trainer.test()
 #         print(name)
 #         print(param)
 #         break
-# %%
